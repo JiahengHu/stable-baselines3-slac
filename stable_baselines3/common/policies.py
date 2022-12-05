@@ -929,7 +929,8 @@ class FactoredActorCriticPolicy(ActorCriticPolicy):
         optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
     ):
-
+        # This needs to be set first, since __init__ calls _build
+        self.reward_channels_dim = reward_channels_dim
         super().__init__(
             observation_space,
             action_space,
@@ -948,7 +949,7 @@ class FactoredActorCriticPolicy(ActorCriticPolicy):
             optimizer_class,
             optimizer_kwargs,
         )
-        self.reward_channels_dim = reward_channels_dim
+
 
     def _build(self, lr_schedule: Schedule) -> None:
         """
@@ -993,6 +994,46 @@ class FactoredActorCriticPolicy(ActorCriticPolicy):
 
         # Setup optimizer with initial learning rate
         self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)
+
+    def forward(self, obs: th.Tensor, deterministic: bool = False) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
+        """
+        Forward pass in all the networks (actor and critic)
+
+        :param obs: Observation
+        :param deterministic: Whether to sample or use deterministic actions
+        :return: action, value and log probability of the action
+        """
+        # Preprocess the observation if needed
+        features = self.extract_features(obs)
+        latent_pi, latent_vf = self.mlp_extractor(features)
+        # Evaluate the values for the given observations
+        values = self.value_net(latent_vf)
+        distribution = self._get_action_dist_from_latent(latent_pi)
+        actions = distribution.get_actions(deterministic=deterministic)
+
+        # We obtain per-dimension action
+        log_prob = distribution.distribution.log_prob(actions)         # log_prob = distribution.log_prob(actions)
+        actions = actions.reshape((-1,) + self.action_space.shape)
+        return actions, values, log_prob
+
+    def evaluate_actions(self, obs: th.Tensor, actions: th.Tensor) -> Tuple[th.Tensor, th.Tensor, Optional[th.Tensor]]:
+        """
+        Evaluate actions according to the current policy,
+        given the observations.
+
+        :param obs:
+        :param actions:
+        :return: estimated value, log likelihood of taking those actions
+            and entropy of the action distribution.
+        """
+        # Preprocess the observation if needed
+        features = self.extract_features(obs)
+        latent_pi, latent_vf = self.mlp_extractor(features)
+        distribution = self._get_action_dist_from_latent(latent_pi)
+        log_prob = distribution.distribution.log_prob(actions)   # distribution.log_prob(actions)
+        values = self.value_net(latent_vf)
+        entropy = distribution.entropy()
+        return values, log_prob, entropy
 
 class FactoredActorCriticCnnPolicy(FactoredActorCriticPolicy):
     """

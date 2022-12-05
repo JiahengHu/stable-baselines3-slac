@@ -7,14 +7,15 @@ from gym import spaces
 from torch.nn import functional as F
 
 from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
-from stable_baselines3.common.policies import ActorCriticCnnPolicy, ActorCriticPolicy, BasePolicy, MultiInputActorCriticPolicy
+from stable_baselines3.common.policies import FactoredActorCriticCnnPolicy, FactoredActorCriticPolicy, BasePolicy, \
+    FactoredMultiInputActorCriticPolicy
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
 from stable_baselines3.common.utils import explained_variance, get_schedule_fn
 
-from stable_baselines3.common.buffers import DictRolloutBuffer, RolloutBuffer
+from stable_baselines3.common.buffers import FacDictRolloutBuffer, DictRolloutBuffer, RolloutBuffer
 import gym
 
-SelfPPO = TypeVar("SelfPPO", bound="PPO")
+SelfPPO = TypeVar("SelfPPO", bound="FPPO")
 
 
 class FPPO(OnPolicyAlgorithm):
@@ -66,16 +67,17 @@ class FPPO(OnPolicyAlgorithm):
     """
 
     policy_aliases: Dict[str, Type[BasePolicy]] = {
-        "MlpPolicy": ActorCriticPolicy,
-        "CnnPolicy": ActorCriticCnnPolicy,
-        "MultiInputPolicy": MultiInputActorCriticPolicy,
+        "MlpPolicy": FactoredActorCriticPolicy,
+        "CnnPolicy": FactoredActorCriticCnnPolicy,
+        "MultiInputPolicy": FactoredMultiInputActorCriticPolicy,
     }
 
     def __init__(
         self,
-        policy: Union[str, Type[ActorCriticPolicy]],
+        policy: Union[str, Type[FactoredActorCriticPolicy]],
         env: Union[GymEnv, str],
         reward_channels_dim: int,
+        causal_matrix: th.Tensor,
         learning_rate: Union[float, Schedule] = 3e-4,
         n_steps: int = 2048,
         batch_size: int = 64,
@@ -157,6 +159,7 @@ class FPPO(OnPolicyAlgorithm):
         self.normalize_advantage = normalize_advantage
         self.target_kl = target_kl
         self.reward_channels_dim = reward_channels_dim
+        self.causal_matrix = causal_matrix.to(self.device)
 
         if _init_setup_model:
             self._setup_model()
@@ -165,12 +168,16 @@ class FPPO(OnPolicyAlgorithm):
         self._setup_lr_schedule()
         self.set_random_seed(self.seed)
 
-        buffer_cls = DictRolloutBuffer if isinstance(self.observation_space, gym.spaces.Dict) else RolloutBuffer
+        assert(isinstance(self.observation_space, gym.spaces.Dict), "Factored replay buffer for non-dict observation "
+                                                                    "not implemented")
+        # buffer_cls = DictRolloutBuffer if isinstance(self.observation_space, gym.spaces.Dict) else RolloutBuffer
+        buffer_cls = FacDictRolloutBuffer
 
         self.rollout_buffer = buffer_cls(
             self.n_steps,
             self.observation_space,
             self.action_space,
+            self.reward_channels_dim,
             device=self.device,
             gamma=self.gamma,
             gae_lambda=self.gae_lambda,
@@ -229,12 +236,15 @@ class FPPO(OnPolicyAlgorithm):
                     self.policy.reset_noise(self.batch_size)
 
                 values, log_prob, entropy = self.policy.evaluate_actions(rollout_data.observations, actions)
-                values = values.flatten()
-                # Normalize advantage
+
+                # Calculate Advantage per action dimension (factored advantages)
                 advantages = rollout_data.advantages
+                advantages = th.mm(advantages, self.causal_matrix)
+
+                # Normalize advantage
                 # Normalization does not make sense if mini batchsize == 1, see GH issue #325
                 if self.normalize_advantage and len(advantages) > 1:
-                    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+                    advantages = (advantages - advantages.mean(axis=0)) / (advantages.std(axis=0) + 1e-8)
 
                 # ratio between old and new policy, should be one at the first iteration
                 ratio = th.exp(log_prob - rollout_data.old_log_prob)
@@ -322,7 +332,7 @@ class FPPO(OnPolicyAlgorithm):
         total_timesteps: int,
         callback: MaybeCallback = None,
         log_interval: int = 1,
-        tb_log_name: str = "PPO",
+        tb_log_name: str = "FPPO",
         reset_num_timesteps: bool = True,
         progress_bar: bool = False,
     ) -> SelfPPO:

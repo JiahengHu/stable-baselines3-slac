@@ -74,7 +74,11 @@ class VecMonitor(VecEnvWrapper):
 
     def step_wait(self) -> VecEnvStepReturn:
         obs, rewards, dones, infos = self.venv.step_wait()
-        self.episode_returns += rewards
+        # Could be a bit hacky: sum up rewards if reward is a vector
+        if rewards.shape[-1] > 1:
+            self.episode_returns += rewards.sum(axis=-1)
+        else:
+            self.episode_returns += rewards
         self.episode_lengths += 1
         new_infos = list(infos[:])
         for i in range(len(dones)):

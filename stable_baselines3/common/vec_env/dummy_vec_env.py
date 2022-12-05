@@ -51,9 +51,14 @@ class DummyVecEnv(VecEnv):
 
     def step_wait(self) -> VecEnvStepReturn:
         for env_idx in range(self.num_envs):
-            obs, self.buf_rews[env_idx], self.buf_dones[env_idx], self.buf_infos[env_idx] = self.envs[env_idx].step(
+            obs, rews_ph, self.buf_dones[env_idx], self.buf_infos[env_idx] = self.envs[env_idx].step(
                 self.actions[env_idx]
             )
+            if len(rews_ph.shape) > 0:
+                self.buf_rews[env_idx] = rews_ph.sum(axis=-1)
+            else:
+                self.buf_rews[env_idx] = rews_ph
+
             if self.buf_dones[env_idx]:
                 # save final observation where user can get it, then reset
                 self.buf_infos[env_idx]["terminal_observation"] = obs

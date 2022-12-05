@@ -216,6 +216,8 @@ class VecNormalize(VecEnvWrapper):
         Normalize rewards using this VecNormalize's rewards statistics.
         Calling this method does not update statistics.
         """
+        print("iGibson Environment should not call normalize reward, otherwise we throw this error")
+        raise NotImplementedError
         if self.norm_reward:
             reward = np.clip(reward / np.sqrt(self.ret_rms.var + self.epsilon), -self.clip_reward, self.clip_reward)
         return reward
