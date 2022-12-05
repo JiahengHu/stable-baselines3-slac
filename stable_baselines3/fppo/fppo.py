@@ -274,6 +274,7 @@ class FPPO(OnPolicyAlgorithm):
 
                 # Entropy loss favor exploration
                 if entropy is None:
+                    raise NotImplementedError
                     # Approximate entropy when no analytical form
                     entropy_loss = -th.mean(-log_prob)
                 else:
@@ -289,6 +290,7 @@ class FPPO(OnPolicyAlgorithm):
                 # and Schulman blog: http://joschu.net/blog/kl-approx.html
                 with th.no_grad():
                     log_ratio = log_prob - rollout_data.old_log_prob
+                    log_ratio = log_ratio.sum(axis=1)
                     approx_kl_div = th.mean((th.exp(log_ratio) - 1) - log_ratio).cpu().numpy()
                     approx_kl_divs.append(approx_kl_div)
 
