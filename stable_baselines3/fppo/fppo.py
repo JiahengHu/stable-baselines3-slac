@@ -99,6 +99,7 @@ class FPPO(OnPolicyAlgorithm):
         seed: Optional[int] = None,
         device: Union[th.device, str] = "auto",
         _init_setup_model: bool = True,
+        sep_vnet: bool = False
     ):
 
         super().__init__(
@@ -160,6 +161,7 @@ class FPPO(OnPolicyAlgorithm):
         self.target_kl = target_kl
         self.reward_channels_dim = reward_channels_dim
         self.causal_matrix = causal_matrix.to(self.device)
+        self.sep_vnet = sep_vnet
 
         if _init_setup_model:
             self._setup_model()
@@ -189,6 +191,7 @@ class FPPO(OnPolicyAlgorithm):
             self.reward_channels_dim,
             self.lr_schedule,
             use_sde=self.use_sde,
+            sep_vnet=self.sep_vnet,
             **self.policy_kwargs  # pytype:disable=not-instantiable
         )
         self.policy = self.policy.to(self.device)

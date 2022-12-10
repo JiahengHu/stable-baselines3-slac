@@ -28,6 +28,7 @@ from stable_baselines3.common.torch_layers import (
     MlpExtractor,
     NatureCNN,
     create_mlp,
+    ValueExtractor,
 )
 from stable_baselines3.common.type_aliases import Schedule
 from stable_baselines3.common.utils import get_device, is_vectorized_observation, obs_as_tensor
@@ -514,6 +515,7 @@ class ActorCriticPolicy(BasePolicy):
             device=self.device,
         )
 
+
     def _build(self, lr_schedule: Schedule) -> None:
         """
         Create the networks and the optimizer.
@@ -928,9 +930,23 @@ class FactoredActorCriticPolicy(ActorCriticPolicy):
         normalize_images: bool = True,
         optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
+        sep_vnet: bool = False,
+        value_net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
     ):
         # This needs to be set first, since __init__ calls _build
         self.reward_channels_dim = reward_channels_dim
+        self.sep_vnet = sep_vnet
+
+        if sep_vnet:
+            # When separate value net, change architecture
+            if net_arch is None:
+                if features_extractor_class == NatureCNN:
+                    net_arch = []
+                else:
+                    net_arch = [dict(pi=[64, 64])]
+            if value_net_arch is None:
+                value_net_arch = [dict(vf=[64, 64])]
+            self.value_net_arch = value_net_arch
         super().__init__(
             observation_space,
             action_space,
@@ -950,6 +966,15 @@ class FactoredActorCriticPolicy(ActorCriticPolicy):
             optimizer_kwargs,
         )
 
+    # If we use this, then the MLP extractor should just be a single layer, all content are moved into the value layer
+    def _build_value_extractor(self) -> None:
+        self.value_net = ValueExtractor(
+            self.mlp_extractor.latent_dim_vf,
+            self.reward_channels_dim,
+            self.value_net_arch,
+            activation_fn=self.activation_fn,
+            device=self.device,
+        )
 
     def _build(self, lr_schedule: Schedule) -> None:
         """
@@ -959,6 +984,7 @@ class FactoredActorCriticPolicy(ActorCriticPolicy):
             lr_schedule(1) is the initial learning rate
         """
         self._build_mlp_extractor()
+
 
         latent_dim_pi = self.mlp_extractor.latent_dim_pi
 
@@ -975,7 +1001,10 @@ class FactoredActorCriticPolicy(ActorCriticPolicy):
         else:
             raise NotImplementedError(f"Unsupported distribution '{self.action_dist}'.")
 
-        self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, self.reward_channels_dim)
+        if self.sep_vnet:
+            self._build_value_extractor()
+        else:
+            self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, self.reward_channels_dim)
         # Init weights: use orthogonal initialization
         # with small initial weight for the output
         if self.ortho_init:
@@ -1086,6 +1115,8 @@ class FactoredActorCriticCnnPolicy(FactoredActorCriticPolicy):
         normalize_images: bool = True,
         optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
+        sep_vnet: bool = False,
+        value_net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
     ):
         super().__init__(
             observation_space,
@@ -1105,6 +1136,8 @@ class FactoredActorCriticCnnPolicy(FactoredActorCriticPolicy):
             normalize_images,
             optimizer_class,
             optimizer_kwargs,
+            sep_vnet,
+            value_net_arch,
         )
 
 
@@ -1159,6 +1192,8 @@ class FactoredMultiInputActorCriticPolicy(FactoredActorCriticPolicy):
         normalize_images: bool = True,
         optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
+        sep_vnet: bool = False,
+        value_net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
     ):
         super().__init__(
             observation_space,
@@ -1178,4 +1213,6 @@ class FactoredMultiInputActorCriticPolicy(FactoredActorCriticPolicy):
             normalize_images,
             optimizer_class,
             optimizer_kwargs,
+            sep_vnet,
+            value_net_arch,
         )
