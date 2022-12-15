@@ -324,6 +324,10 @@ class FPPO(OnPolicyAlgorithm):
         self.logger.record("train/clip_fraction", np.mean(clip_fractions))
         self.logger.record("train/loss", loss.item())
         self.logger.record("train/explained_variance", explained_var)
+
+        # Added logs
+        self.logger.record("train/stopping_epoch", epoch)
+
         if hasattr(self.policy, "log_std"):
             self.logger.record("train/std", th.exp(self.policy.log_std).mean().item())
 
