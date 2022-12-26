@@ -18,6 +18,8 @@ def evaluate_policy(
     reward_threshold: Optional[float] = None,
     return_episode_rewards: bool = False,
     warn: bool = True,
+    reward_channels_dim=None,
+    report_factored_reward=False,
 ) -> Union[Tuple[float, float], Tuple[List[float], List[int]]]:
     """
     Runs policy for ``n_eval_episodes`` episodes and returns average reward.
@@ -59,7 +61,7 @@ def evaluate_policy(
     from stable_baselines3.common.monitor import Monitor
 
     if not isinstance(env, VecEnv):
-        env = DummyVecEnv([lambda: env])
+        env = DummyVecEnv([lambda: env], reward_channels_dim, report_factored_reward)
 
     is_monitor_wrapped = is_vecenv_wrapped(env, VecMonitor) or env.env_is_wrapped(Monitor)[0]
 
@@ -79,7 +81,10 @@ def evaluate_policy(
     # Divides episodes among different sub environments in the vector as evenly as possible
     episode_count_targets = np.array([(n_eval_episodes + i) // n_envs for i in range(n_envs)], dtype="int")
 
-    current_rewards = np.zeros(n_envs)
+    if report_factored_reward:
+        current_rewards = np.zeros([n_envs, reward_channels_dim])
+    else:
+        current_rewards = np.zeros(n_envs)
     current_lengths = np.zeros(n_envs, dtype="int")
     observations = env.reset()
     states = None
@@ -88,6 +93,8 @@ def evaluate_policy(
         actions, states = model.predict(observations, state=states, episode_start=episode_starts, deterministic=deterministic)
         observations, rewards, dones, infos = env.step(actions)
         current_rewards += rewards
+
+
         current_lengths += 1
         for i in range(n_envs):
             if episode_counts[i] < episode_count_targets[i]:
@@ -115,7 +122,10 @@ def evaluate_policy(
                             # Only increment at the real end of an episode
                             episode_counts[i] += 1
                     else:
-                        episode_rewards.append(current_rewards[i])
+                        if report_factored_reward:
+                            episode_rewards.append(current_rewards[i].copy())
+                        else:
+                            episode_rewards.append(current_rewards[i])
                         episode_lengths.append(current_lengths[i])
                         episode_counts[i] += 1
                     current_rewards[i] = 0
@@ -124,8 +134,8 @@ def evaluate_policy(
         if render:
             env.render()
 
-    mean_reward = np.mean(episode_rewards)
-    std_reward = np.std(episode_rewards)
+    mean_reward = np.mean(episode_rewards, axis=0)
+    std_reward = np.std(episode_rewards, axis=0)
     if reward_threshold is not None:
         assert mean_reward > reward_threshold, "Mean reward below threshold: " f"{mean_reward:.2f} < {reward_threshold:.2f}"
     if return_episode_rewards:

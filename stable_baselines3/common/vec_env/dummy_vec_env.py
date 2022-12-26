@@ -22,7 +22,7 @@ class DummyVecEnv(VecEnv):
     :raises ValueError: If the same environment instance is passed as the output of two or more different env_fn.
     """
 
-    def __init__(self, env_fns: List[Callable[[], gym.Env]]):
+    def __init__(self, env_fns: List[Callable[[], gym.Env]], reward_channels_dim=None, report_factored_reward=False,):
         self.envs = [fn() for fn in env_fns]
         if len(set([id(env.unwrapped) for env in self.envs])) != len(self.envs):
             raise ValueError(
@@ -39,9 +39,15 @@ class DummyVecEnv(VecEnv):
         obs_space = env.observation_space
         self.keys, shapes, dtypes = obs_space_info(obs_space)
 
+        # Whether to return factored reward
+        self.factored_reward = report_factored_reward
+
         self.buf_obs = OrderedDict([(k, np.zeros((self.num_envs,) + tuple(shapes[k]), dtype=dtypes[k])) for k in self.keys])
         self.buf_dones = np.zeros((self.num_envs,), dtype=bool)
-        self.buf_rews = np.zeros((self.num_envs,), dtype=np.float32)
+        if self.factored_reward:
+            self.buf_rews = np.zeros((self.num_envs,reward_channels_dim), dtype=np.float32)
+        else:
+            self.buf_rews = np.zeros((self.num_envs,), dtype=np.float32)
         self.buf_infos = [{} for _ in range(self.num_envs)]
         self.actions = None
         self.metadata = env.metadata
@@ -55,7 +61,10 @@ class DummyVecEnv(VecEnv):
                 self.actions[env_idx]
             )
             if len(rews_ph.shape) > 0:
-                self.buf_rews[env_idx] = rews_ph.sum(axis=-1)
+                if self.factored_reward:
+                    self.buf_rews[env_idx] = rews_ph
+                else:
+                    self.buf_rews[env_idx] = rews_ph.sum(axis=-1)
             else:
                 self.buf_rews[env_idx] = rews_ph
 
