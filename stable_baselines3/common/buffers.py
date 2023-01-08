@@ -780,6 +780,26 @@ class DictRolloutBuffer(RolloutBuffer):
 
 ################################################################################
 
+# https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_online_algorithm
+# For a new value newValue, compute the new count, new mean, the new M2.
+# mean accumulates the mean of the entire dataset
+# M2 aggregates the squared distance from the mean
+# count aggregates the number of samples seen so far
+def update(count, mean, M2, newValues):
+    assert(len(newValues.shape) == 2)
+    new_count = newValues.shape[0]
+    count += new_count
+    delta = np.subtract(newValues, mean)
+    mean += np.sum(delta / count, axis=0)
+    delta2 = np.subtract(newValues, mean)
+    M2 += np.sum(delta * delta2, axis=0)
+    return count, mean, M2
+
+# Retrieve the mean, variance and sample variance from an aggregate
+def finalize(count, mean, M2):
+    assert(count > 2)
+    return  M2 / count
+
 class FacDictRolloutBuffer(DictRolloutBuffer):
     """
     Dict Rollout buffer used in factored PPO.
@@ -818,6 +838,12 @@ class FacDictRolloutBuffer(DictRolloutBuffer):
     ):
         self.reward_channels_dim = reward_channels_dim
         super().__init__(buffer_size, observation_space, action_space, device, gae_lambda, gamma, n_envs)
+
+        # Initialize running variance calculation base
+        self.r_means = np.zeros(self.reward_channels_dim, dtype=np.float64)
+        self.G2_means = np.zeros(self.reward_channels_dim, dtype=np.float64)
+        self.r_M2 = np.zeros(self.reward_channels_dim, dtype=np.float64)
+        self.count = 0
 
     def reset(self) -> None:
         assert isinstance(self.obs_shape, dict), "FacDictRolloutBuffer must be used with Dict obs space only"
@@ -874,6 +900,20 @@ class FacDictRolloutBuffer(DictRolloutBuffer):
         # TD(lambda) estimator, see Github PR #375 or "Telescoping in TD(lambda)"
         # in David Silver Lecture 4: https://www.youtube.com/watch?v=PnHCvfgC_ZA
         self.returns = self.advantages + self.values
+
+        # Calculate variance of reward
+        # First, convert data type to 64, for precision purpose
+        new_rewards = self.rewards.copy().astype(np.float64).reshape(-1, self.reward_channels_dim)
+        self.count, self.r_means, self.r_M2 = update(self.count, self.r_means, self.r_M2, new_rewards)
+        self.r_var = finalize(self.count, self.r_means, self.r_M2)
+        self.r_var_batch = np.var(new_rewards, axis=0)
+
+        # Calculate mean of return^2
+        new_returns = self.returns.copy().astype(np.float64).reshape(-1, self.reward_channels_dim)
+        nr2 = new_returns * new_returns
+        delta = np.subtract(nr2, self.G2_means)
+        self.G2_means += np.sum(delta / self.count, axis=0)
+        self.G2_means_batch = np.mean(nr2, axis=0)
 
     # # Might or might not need to be changed
     def add(

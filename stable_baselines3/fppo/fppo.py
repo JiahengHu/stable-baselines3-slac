@@ -2,6 +2,7 @@ import warnings
 from typing import Any, Dict, Optional, Type, TypeVar, Union
 
 import numpy as np
+import torch
 import torch as th
 from gym import spaces
 from torch.nn import functional as F
@@ -99,7 +100,11 @@ class FPPO(OnPolicyAlgorithm):
         seed: Optional[int] = None,
         device: Union[th.device, str] = "auto",
         _init_setup_model: bool = True,
-        sep_vnet: bool = False
+        sep_vnet: bool = False,
+        value_loss_normalization: bool = False,
+        value_grad_rescale: bool = False,
+        approx_var_gamma: bool = False,
+        episode_length: Optional[int] = None,
     ):
 
         super().__init__(
@@ -162,6 +167,10 @@ class FPPO(OnPolicyAlgorithm):
         self.reward_channels_dim = reward_channels_dim
         self.causal_matrix = causal_matrix.to(self.device)
         self.sep_vnet = sep_vnet
+        self.value_grad_rescale = value_grad_rescale
+        self.value_loss_normalization = value_loss_normalization
+        self.approx_var_gamma = approx_var_gamma
+        self.episode_length = episode_length
 
         if _init_setup_model:
             self._setup_model()
@@ -271,8 +280,27 @@ class FPPO(OnPolicyAlgorithm):
                     values_pred = rollout_data.old_values + th.clamp(
                         values - rollout_data.old_values, -clip_range_vf, clip_range_vf
                     )
-                # Value loss using the TD(gae_lambda) target
-                value_loss = F.mse_loss(rollout_data.returns, values_pred)
+
+                if self.value_loss_normalization:
+                    if self.approx_var_gamma:
+                        var_gamma = 1.0 / self.episode_length
+                    else:
+                        raise NotImplementedError
+                    # https://arxiv.org/pdf/2105.05347v1.pdf
+                    sigma = self.rollout_buffer.r_var + var_gamma * self.rollout_buffer.G2_means
+                    # calculate batch sigma
+                    sigma_batch = self.rollout_buffer.r_var_batch + var_gamma * self.rollout_buffer.G2_means_batch
+                    sigma_floor = np.ones(self.reward_channels_dim) * 1e-4 # std would be 1e-2
+                    sigma_final = np.maximum.reduce([sigma_floor,sigma_batch,sigma])
+                    std_delta = torch.tensor(np.sqrt(sigma_final), device=self.device)
+
+                    normalized_delta = (rollout_data.returns - values_pred) / std_delta
+                    value_loss = torch.mean(normalized_delta * normalized_delta)
+                else:
+                    # Value loss using the TD(gae_lambda) target
+                    value_loss = F.mse_loss(rollout_data.returns, values_pred)
+
+
                 value_losses.append(value_loss.item())
 
                 # Entropy loss favor exploration
@@ -306,6 +334,16 @@ class FPPO(OnPolicyAlgorithm):
                 # Optimization step
                 self.policy.optimizer.zero_grad()
                 loss.backward()
+
+                if self.value_grad_rescale:
+                    if self.sep_vnet:
+                        # grad rescale with value net separation not implemented
+                        raise NotImplementedError
+                    else:
+                        # The value net is a linear layer. We rescale the gradient of them
+                        for p in self.policy.value_net.parameters():
+                            p.grad *= np.sqrt(self.policy.reward_channels_dim)
+
                 # Clip grad norm
                 th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 self.policy.optimizer.step()
