@@ -16,7 +16,7 @@ from stable_baselines3.common.utils import explained_variance, get_schedule_fn
 from stable_baselines3.common.buffers import FacDictRolloutBuffer, DictRolloutBuffer, RolloutBuffer
 import gym
 
-SelfPPO = TypeVar("SelfPPO", bound="FPPO")
+SelfFPPO = TypeVar("SelfFPPO", bound="FPPO")
 
 
 class FPPO(OnPolicyAlgorithm):
@@ -179,8 +179,8 @@ class FPPO(OnPolicyAlgorithm):
         self._setup_lr_schedule()
         self.set_random_seed(self.seed)
 
-        assert(isinstance(self.observation_space, gym.spaces.Dict), "Factored replay buffer for non-dict observation "
-                                                                    "not implemented")
+        assert isinstance(self.observation_space, gym.spaces.Dict), "Factored replay buffer for non-dict observation " \
+                                                                    "not implemented"
         # buffer_cls = DictRolloutBuffer if isinstance(self.observation_space, gym.spaces.Dict) else RolloutBuffer
         buffer_cls = FacDictRolloutBuffer
 
@@ -375,14 +375,14 @@ class FPPO(OnPolicyAlgorithm):
             self.logger.record("train/clip_range_vf", clip_range_vf)
 
     def learn(
-        self: SelfPPO,
+        self: SelfFPPO,
         total_timesteps: int,
         callback: MaybeCallback = None,
         log_interval: int = 1,
         tb_log_name: str = "FPPO",
         reset_num_timesteps: bool = True,
         progress_bar: bool = False,
-    ) -> SelfPPO:
+    ) -> SelfFPPO:
 
         return super().learn(
             total_timesteps=total_timesteps,

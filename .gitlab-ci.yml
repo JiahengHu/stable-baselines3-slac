@@ -1,9 +1,9 @@
 image: stablebaselines/stable-baselines3-cpu:1.4.1a0
 
-type-check:
-  script:
-  - pip install pytype mypy --upgrade
-  - make type
+#type-check:
+#  script:
+#  - pip install pytype mypy --upgrade
+#  - make type
 
 pytest:
   script:

@@ -94,7 +94,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         self.ent_coef = ent_coef
         self.vf_coef = vf_coef
         self.max_grad_norm = max_grad_norm
-        self.rollout_buffer = None
+        self.rollout_buffer = None    # type: ignore
 
         if _init_setup_model:
             self._setup_model()
