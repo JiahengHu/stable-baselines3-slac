@@ -153,8 +153,10 @@ class DummyVecEnv(VecEnv):
 
     # Following functions are for skill training
     def save_traj(self, fn):
+        # Otherwise the file will overwrite eachother
+        assert len(self.envs) == 1
         for i, env in enumerate(self.envs):
-            env.save_traj(f"env_{i}:" + fn)
+            env.save_traj(fn)
 
     def plot_prediction_net(self, agent, cfg, step=0, device="cuda", anti=False, SHOW=False):
         for i, env in enumerate(self.envs):
