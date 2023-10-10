@@ -150,3 +150,12 @@ class DummyVecEnv(VecEnv):
     def _get_target_envs(self, indices: VecEnvIndices) -> List[gym.Env]:
         indices = self._get_indices(indices)
         return [self.envs[i] for i in indices]
+
+    # Following functions are for skill training
+    def save_traj(self, fn):
+        for i, env in enumerate(self.envs):
+            env.save_traj(f"env_{i}:" + fn)
+
+    def plot_prediction_net(self, agent, cfg, step=0, device="cuda", anti=False, SHOW=False):
+        for i, env in enumerate(self.envs):
+            env.plot_prediction_net(agent, cfg, step=step, device=device, anti=anti, SHOW=SHOW)
