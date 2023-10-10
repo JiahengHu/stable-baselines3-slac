@@ -60,7 +60,7 @@ class DummyVecEnv(VecEnv):
             obs, rews_ph, self.buf_dones[env_idx], self.buf_infos[env_idx] = self.envs[env_idx].step(
                 self.actions[env_idx]
             )
-            if len(rews_ph.shape) > 0:
+            if isinstance(rews_ph, np.ndarray) and len(rews_ph.shape) > 0:
                 if self.factored_reward:
                     self.buf_rews[env_idx] = rews_ph
                 else:
