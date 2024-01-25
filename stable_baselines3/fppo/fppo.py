@@ -13,7 +13,7 @@ from stable_baselines3.common.policies import FactoredActorCriticCnnPolicy, Fact
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
 from stable_baselines3.common.utils import explained_variance, get_schedule_fn
 
-from stable_baselines3.common.buffers import FacDictRolloutBuffer, DictRolloutBuffer, RolloutBuffer
+from stable_baselines3.common.buffers import FacDictRolloutBuffer, DictRolloutBuffer, RolloutBuffer, FacRolloutBuffer
 import gym
 
 SelfFPPO = TypeVar("SelfFPPO", bound="FPPO")
@@ -179,10 +179,7 @@ class FPPO(OnPolicyAlgorithm):
         self._setup_lr_schedule()
         self.set_random_seed(self.seed)
 
-        assert isinstance(self.observation_space, gym.spaces.Dict), "Factored replay buffer for non-dict observation " \
-                                                                    "not implemented"
-        # buffer_cls = DictRolloutBuffer if isinstance(self.observation_space, gym.spaces.Dict) else RolloutBuffer
-        buffer_cls = FacDictRolloutBuffer
+        buffer_cls = FacDictRolloutBuffer if isinstance(self.observation_space, gym.spaces.Dict) else FacRolloutBuffer
 
         self.rollout_buffer = buffer_cls(
             self.n_steps,
@@ -247,7 +244,8 @@ class FPPO(OnPolicyAlgorithm):
                 if self.use_sde:
                     self.policy.reset_noise(self.batch_size)
 
-                values, log_prob, entropy = self.policy.evaluate_actions(rollout_data.observations, actions)
+                values, log_prob, entropy = self.policy.evaluate_actions(
+                    torch.tensor(rollout_data.observations, device=self.device), actions)
 
                 # Calculate Advantage per action dimension (factored advantages)
                 advantages = rollout_data.advantages

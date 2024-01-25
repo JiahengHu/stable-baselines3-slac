@@ -1040,8 +1040,16 @@ class FactoredActorCriticPolicy(ActorCriticPolicy):
         distribution = self._get_action_dist_from_latent(latent_pi)
         actions = distribution.get_actions(deterministic=deterministic)
 
-        # We obtain per-dimension action
-        log_prob = distribution.distribution.log_prob(actions)         # log_prob = distribution.log_prob(actions)
+        # We obtain per-dimension action; originally log_prob = distribution.log_prob(actions)
+        if isinstance(self.action_space, gym.spaces.Box):
+            log_prob = distribution.distribution.log_prob(actions)
+        elif isinstance(self.action_space, gym.spaces.MultiDiscrete):
+            log_prob = th.stack(
+                [dist.log_prob(action) for dist, action in zip(distribution.distribution, th.unbind(actions, dim=1))], dim=1
+            )
+        else:
+            raise NotImplementedError("Only Box and MultiDiscrete are supported for now")
+
         actions = actions.reshape((-1,) + self.action_space.shape)
         return actions, values, log_prob
 
@@ -1059,7 +1067,16 @@ class FactoredActorCriticPolicy(ActorCriticPolicy):
         features = self.extract_features(obs)
         latent_pi, latent_vf = self.mlp_extractor(features)
         distribution = self._get_action_dist_from_latent(latent_pi)
-        log_prob = distribution.distribution.log_prob(actions)   # distribution.log_prob(actions)
+        # We obtain per-dimension action; originally log_prob = distribution.log_prob(actions)
+        if isinstance(self.action_space, gym.spaces.Box):
+            log_prob = distribution.distribution.log_prob(actions)
+        elif isinstance(self.action_space, gym.spaces.MultiDiscrete):
+            log_prob = th.stack(
+                [dist.log_prob(action) for dist, action in zip(distribution.distribution, th.unbind(actions, dim=1))],
+                dim=1
+            )
+        else:
+            raise NotImplementedError("Only Box and MultiDiscrete are supported for now")
         values = self.value_net(latent_vf)
         entropy = distribution.entropy()
         return values, log_prob, entropy
