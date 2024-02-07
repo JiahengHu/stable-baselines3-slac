@@ -1058,20 +1058,6 @@ class FacRolloutBuffer(RolloutBuffer):
         # in David Silver Lecture 4: https://www.youtube.com/watch?v=PnHCvfgC_ZA
         self.returns = self.advantages + self.values
 
-        # Calculate variance of reward
-        # First, convert data type to 64, for precision purpose
-        new_rewards = self.rewards.copy().astype(np.float64).reshape(-1, self.reward_channels_dim)
-        self.count, self.r_means, self.r_M2 = update(self.count, self.r_means, self.r_M2, new_rewards)
-        self.r_var = finalize(self.count, self.r_means, self.r_M2)
-        self.r_var_batch = np.var(new_rewards, axis=0)
-
-        # Calculate mean of return^2
-        new_returns = self.returns.copy().astype(np.float64).reshape(-1, self.reward_channels_dim)
-        nr2 = new_returns * new_returns
-        delta = np.subtract(nr2, self.G2_means)
-        self.G2_means += np.sum(delta / self.count, axis=0)
-        self.G2_means_batch = np.mean(nr2, axis=0)
-
     # # Might or might not need to be changed
     def add(
         self,
@@ -1101,6 +1087,10 @@ class FacRolloutBuffer(RolloutBuffer):
         if isinstance(self.observation_space, spaces.Discrete):
             obs = obs.reshape((self.n_envs,) + self.obs_shape)
 
+        # Same reshape, for actions
+        action = action.reshape((self.n_envs, self.action_dim))
+
+        self.observations[self.pos] = np.array(obs).copy()
         self.actions[self.pos] = np.array(action).copy()
         self.rewards[self.pos] = np.array(reward).copy()
         self.episode_starts[self.pos] = np.array(episode_start).copy()
@@ -1111,8 +1101,8 @@ class FacRolloutBuffer(RolloutBuffer):
             self.full = True
 
     def _get_samples(self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None) -> DictRolloutBufferSamples:
-        return DictRolloutBufferSamples(
-            self.observations[batch_inds],
+        return RolloutBufferSamples(
+            observations=self.to_torch(self.observations[batch_inds]),
             actions=self.to_torch(self.actions[batch_inds]),
             old_values=self.to_torch(self.values[batch_inds]),
             old_log_prob=self.to_torch(self.log_probs[batch_inds]),
