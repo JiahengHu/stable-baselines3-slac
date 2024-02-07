@@ -246,6 +246,7 @@ class FPPO(OnPolicyAlgorithm):
 
                 values, log_prob, entropy = self.policy.evaluate_actions(
                     torch.tensor(rollout_data.observations, device=self.device), actions)
+                # TODO: why? doesn't make sense
 
                 # Calculate Advantage per action dimension (factored advantages)
                 advantages = rollout_data.advantages
@@ -257,7 +258,10 @@ class FPPO(OnPolicyAlgorithm):
                     advantages = (advantages - advantages.mean(axis=0)) / (advantages.std(axis=0) + 1e-8)
 
                 # ratio between old and new policy, should be one at the first iteration
-                ratio = th.exp(log_prob - rollout_data.old_log_prob)
+                # ratio = th.exp(log_prob - rollout_data.old_log_prob)
+                # TODO: test if clipping is the problem
+                ratio = th.exp((log_prob - rollout_data.old_log_prob).sum(dim=1, keepdim=True))
+
 
                 # clipped surrogate loss
                 policy_loss_1 = advantages * ratio
@@ -279,6 +283,7 @@ class FPPO(OnPolicyAlgorithm):
                         values - rollout_data.old_values, -clip_range_vf, clip_range_vf
                     )
 
+                assert self.value_loss_normalization == False
                 if self.value_loss_normalization:
                     if self.approx_var_gamma:
                         var_gamma = 1.0 / self.episode_length
