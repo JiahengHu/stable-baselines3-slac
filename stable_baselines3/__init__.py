@@ -9,6 +9,7 @@ from stable_baselines3.ppo import PPO
 from stable_baselines3.sac import SAC
 from stable_baselines3.td3 import TD3
 from stable_baselines3.fppo import FPPO
+from stable_baselines3.dsac import DSAC
 
 # Read version from file
 version_file = os.path.join(os.path.dirname(__file__), "version.txt")
