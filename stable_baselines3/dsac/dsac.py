@@ -13,7 +13,7 @@ from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedul
 from stable_baselines3.common.utils import get_parameters_by_name, polyak_update
 from stable_baselines3.dsac.policies import CnnPolicy, MlpPolicy, MultiInputPolicy, SACPolicy
 
-SelfSAC = TypeVar("SelfSAC", bound="DSAC")
+SelfDSAC = TypeVar("SelfDSAC", bound="DSAC")
 
 
 class DSAC(OffPolicyAlgorithm):
@@ -133,7 +133,7 @@ class DSAC(OffPolicyAlgorithm):
             sde_sample_freq=sde_sample_freq,
             use_sde_at_warmup=use_sde_at_warmup,
             optimize_memory_usage=optimize_memory_usage,
-            supported_action_spaces=(gym.spaces.Box),
+            supported_action_spaces=(gym.spaces.MultiDiscrete),
             support_multi_env=True,
         )
 
@@ -157,7 +157,12 @@ class DSAC(OffPolicyAlgorithm):
         # Target entropy is used when learning the entropy coefficient
         if self.target_entropy == "auto":
             # automatically set target entropy if needed
-            self.target_entropy = -np.prod(self.env.action_space.shape).astype(np.float32)
+            # TODO: consider changing the default target entropy
+            te_coeff = 0.5
+            assert len(self.env.action_space.shape) == 1
+            self.target_entropy = te_coeff * np.log(
+                1 / (self.env.action_space[0].n ** self.env.action_space.shape[0])
+            ).astype(np.float32)
         else:
             # Force conversion
             # this will also throw an error for unexpected string
@@ -210,8 +215,9 @@ class DSAC(OffPolicyAlgorithm):
             if self.use_sde:
                 self.actor.reset_noise()
 
-            # Action by the current actor for the sampled state
-            actions_pi, log_prob = self.actor.action_log_prob(replay_data.observations)
+            # Action by the current actor for the sampled state, using gumbel-softmax to make it differentiable
+            actions_pi, log_prob = self.actor.action_differentiable_log_prob(replay_data.observations)
+            # actions_pi, log_prob = self.actor.action_log_prob(replay_data.observations)
             log_prob = log_prob.reshape(-1, 1)
 
             ent_coef_loss = None
@@ -237,8 +243,9 @@ class DSAC(OffPolicyAlgorithm):
             with th.no_grad():
                 # Select action according to policy
                 next_actions, next_log_prob = self.actor.action_log_prob(replay_data.next_observations)
+                onehot_next_actions = th.nn.functional.one_hot(next_actions, self.actor.action_dim)
                 # Compute the next Q values: min over all critics targets
-                next_q_values = th.cat(self.critic_target(replay_data.next_observations, next_actions), dim=1)
+                next_q_values = th.cat(self.critic_target(replay_data.next_observations, onehot_next_actions), dim=1)
                 next_q_values, _ = th.min(next_q_values, dim=1, keepdim=True)
                 # add entropy term
                 next_q_values = next_q_values - ent_coef * next_log_prob.reshape(-1, 1)
@@ -246,8 +253,8 @@ class DSAC(OffPolicyAlgorithm):
                 target_q_values = replay_data.rewards + (1 - replay_data.dones) * self.gamma * next_q_values
 
             # Get current Q-values estimates for each critic network
-            # using action from the replay buffer
-            current_q_values = self.critic(replay_data.observations, replay_data.actions)
+            onehot_actions = th.nn.functional.one_hot(replay_data.actions, self.actor.action_dim)
+            current_q_values = self.critic(replay_data.observations, onehot_actions)
 
             # Compute critic loss
             critic_loss = 0.5 * sum(F.mse_loss(current_q, target_q_values) for current_q in current_q_values)
@@ -287,14 +294,14 @@ class DSAC(OffPolicyAlgorithm):
             self.logger.record("train/ent_coef_loss", np.mean(ent_coef_losses))
 
     def learn(
-        self: SelfSAC,
+        self: SelfDSAC,
         total_timesteps: int,
         callback: MaybeCallback = None,
         log_interval: int = 4,
         tb_log_name: str = "DSAC",
         reset_num_timesteps: bool = True,
         progress_bar: bool = False,
-    ) -> SelfSAC:
+    ):
 
         return super().learn(
             total_timesteps=total_timesteps,

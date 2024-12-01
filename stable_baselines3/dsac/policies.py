@@ -3,9 +3,11 @@ from typing import Any, Dict, List, Optional, Tuple, Type, Union
 import gym
 import torch as th
 from torch import nn
+from torch.nn.functional import gumbel_softmax
 
-from stable_baselines3.common.distributions import SquashedDiagGaussianDistribution, StateDependentNoiseDistribution
-from stable_baselines3.common.policies import BasePolicy, ContinuousCritic
+from stable_baselines3.common.distributions import (
+    MultiOneHotCategoricalDistribution, MultiCategoricalDistribution)
+from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.preprocessing import get_action_dim
 from stable_baselines3.common.torch_layers import (
     BaseFeaturesExtractor,
@@ -16,6 +18,7 @@ from stable_baselines3.common.torch_layers import (
     get_actor_critic_arch,
 )
 from stable_baselines3.common.type_aliases import Schedule
+from stable_baselines3.common.policies import BaseModel
 
 # CAP the standard deviation of the actor
 LOG_STD_MAX = 2
@@ -79,26 +82,24 @@ class Actor(BasePolicy):
         self.full_std = full_std
         self.clip_mean = clip_mean
 
-        action_dim = get_action_dim(self.action_space)
         latent_pi_net = create_mlp(features_dim, -1, net_arch, activation_fn)
         self.latent_pi = nn.Sequential(*latent_pi_net)
         last_layer_dim = net_arch[-1] if len(net_arch) > 0 else features_dim
 
-        if self.use_sde:
-            self.action_dist = StateDependentNoiseDistribution(
-                action_dim, full_std=full_std, use_expln=use_expln, learn_features=True, squash_output=True
-            )
-            self.mu, self.log_std = self.action_dist.proba_distribution_net(
-                latent_dim=last_layer_dim, latent_sde_dim=last_layer_dim, log_std_init=log_std_init
-            )
-            # Avoid numerical issues by limiting the mean of the Gaussian
-            # to be in [-clip_mean, clip_mean]
-            if clip_mean > 0.0:
-                self.mu = nn.Sequential(self.mu, nn.Hardtanh(min_val=-clip_mean, max_val=clip_mean))
-        else:
-            self.action_dist = SquashedDiagGaussianDistribution(action_dim)
-            self.mu = nn.Linear(last_layer_dim, action_dim)
-            self.log_std = nn.Linear(last_layer_dim, action_dim)
+        # TODO: add these back for continous action
+        # action_dim = get_action_dim(self.action_space)
+        # self.action_dist = SquashedDiagGaussianDistribution(action_dim)
+        # self.mu = nn.Linear(last_layer_dim, action_dim)
+        # self.log_std = nn.Linear(last_layer_dim, action_dim)
+
+        # We stick with the integer version for now - will manually convert to one-hot
+        self.action_dist = MultiCategoricalDistribution(self.action_space.nvec)
+
+        self.action_channel = len(self.action_space.nvec)
+        self.action_dim = self.action_space.nvec[0]
+
+        self.action_net = self.action_dist.proba_distribution_net(latent_dim=last_layer_dim)
+        assert isinstance(self.action_dist, MultiCategoricalDistribution)
 
     def _get_constructor_parameters(self) -> Dict[str, Any]:
         data = super()._get_constructor_parameters()
@@ -118,31 +119,7 @@ class Actor(BasePolicy):
         )
         return data
 
-    def get_std(self) -> th.Tensor:
-        """
-        Retrieve the standard deviation of the action distribution.
-        Only useful when using gSDE.
-        It corresponds to ``th.exp(log_std)`` in the normal case,
-        but is slightly different when using ``expln`` function
-        (cf StateDependentNoiseDistribution doc).
-
-        :return:
-        """
-        msg = "get_std() is only available when using gSDE"
-        assert isinstance(self.action_dist, StateDependentNoiseDistribution), msg
-        return self.action_dist.get_std(self.log_std)
-
-    def reset_noise(self, batch_size: int = 1) -> None:
-        """
-        Sample new weights for the exploration matrix, when using gSDE.
-
-        :param batch_size:
-        """
-        msg = "reset_noise() is only available when using gSDE"
-        assert isinstance(self.action_dist, StateDependentNoiseDistribution), msg
-        self.action_dist.sample_weights(self.log_std, batch_size=batch_size)
-
-    def get_action_dist_params(self, obs: th.Tensor) -> Tuple[th.Tensor, th.Tensor, Dict[str, th.Tensor]]:
+    def get_action_dist_params(self, obs: th.Tensor) -> Tuple[th.Tensor, Dict[str, th.Tensor]]:
         """
         Get the parameters for the action distribution.
 
@@ -152,28 +129,104 @@ class Actor(BasePolicy):
         """
         features = self.extract_features(obs)
         latent_pi = self.latent_pi(features)
-        mean_actions = self.mu(latent_pi)
+        mean_actions = self.action_net(latent_pi) # THis is the action logit
 
-        if self.use_sde:
-            return mean_actions, self.log_std, dict(latent_sde=latent_pi)
-        # Unstructured exploration (Original implementation)
-        log_std = self.log_std(latent_pi)
-        # Original Implementation to cap the standard deviation
-        log_std = th.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX)
-        return mean_actions, log_std, {}
+        return mean_actions, {}
 
     def forward(self, obs: th.Tensor, deterministic: bool = False) -> th.Tensor:
-        mean_actions, log_std, kwargs = self.get_action_dist_params(obs)
-        # Note: the action is squashed
-        return self.action_dist.actions_from_params(mean_actions, log_std, deterministic=deterministic, **kwargs)
+        mean_actions, kwargs = self.get_action_dist_params(obs)
+        return self.action_dist.actions_from_params(mean_actions, deterministic=deterministic, **kwargs)
 
     def action_log_prob(self, obs: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
-        mean_actions, log_std, kwargs = self.get_action_dist_params(obs)
+        mean_actions, kwargs = self.get_action_dist_params(obs)
         # return action and associated log prob
-        return self.action_dist.log_prob_from_params(mean_actions, log_std, **kwargs)
+        return self.action_dist.log_prob_from_params(mean_actions, **kwargs)
+
+    # Get differentiable samples using gumbel softmax
+    def action_differentiable_log_prob(self, obs: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
+        logits, kwargs = self.get_action_dist_params(obs)
+        gb_logits = logits.reshape(logits.shape[0], self.action_channel, self.action_dim)
+        actions = gumbel_softmax(gb_logits, tau=1, hard=True) #TODO: try hard=False later, hyperparam tune tau
+
+        # calculate the log prob
+        self.action_dist.proba_distribution(logits)
+        integer_actions = th.argmax(actions, dim=-1)
+        log_prob = self.action_dist.log_prob(integer_actions)
+        return actions, log_prob
+
 
     def _predict(self, observation: th.Tensor, deterministic: bool = False) -> th.Tensor:
         return self(observation, deterministic)
+
+
+class DSACCritic(BaseModel):
+    """
+    Critic network(s) for DDPG/SAC/TD3.
+    It represents the action-state value function (Q-value function).
+    Compared to A2C/PPO critics, this one represents the Q-value
+    and takes the continuous action as input. It is concatenated with the state
+    and then fed to the network which outputs a single value: Q(s, a).
+    For more recent algorithms like SAC/TD3, multiple networks
+    are created to give different estimates.
+
+    By default, it creates two critic networks used to reduce overestimation
+    thanks to clipped Q-learning (cf TD3 paper).
+
+    :param observation_space: Obervation space
+    :param action_space: Action space
+    :param net_arch: Network architecture
+    :param features_extractor: Network to extract features
+        (a CNN when using images, a nn.Flatten() layer otherwise)
+    :param features_dim: Number of features
+    :param activation_fn: Activation function
+    :param normalize_images: Whether to normalize images or not,
+         dividing by 255.0 (True by default)
+    :param n_critics: Number of critic networks to create.
+    :param share_features_extractor: Whether the features extractor is shared or not
+        between the actor and the critic (this saves computation time)
+    """
+
+    def __init__(
+        self,
+        observation_space: gym.spaces.Space,
+        action_space: gym.spaces.Space,
+        net_arch: List[int],
+        features_extractor: nn.Module,
+        features_dim: int,
+        activation_fn: Type[nn.Module] = nn.ReLU,
+        normalize_images: bool = True,
+        n_critics: int = 2,
+        share_features_extractor: bool = True,
+    ):
+        super().__init__(
+            observation_space,
+            action_space,
+            features_extractor=features_extractor,
+            normalize_images=normalize_images,
+        )
+
+        self.action_dim = action_dim = int(len(self.action_space.nvec) * self.action_space.nvec[0])
+
+        self.share_features_extractor = share_features_extractor
+        self.n_critics = n_critics
+        self.q_networks = []
+        for idx in range(n_critics):
+            q_net = create_mlp(features_dim + action_dim, 1, net_arch, activation_fn)
+            q_net = nn.Sequential(*q_net)
+            self.add_module(f"qf{idx}", q_net)
+            self.q_networks.append(q_net)
+
+    def forward(self, obs: th.Tensor, actions: th.Tensor) -> Tuple[th.Tensor, ...]:
+        # Learn the features extractor using the policy loss only
+        # when the features_extractor is shared with the actor
+        with th.set_grad_enabled(not self.share_features_extractor):
+            features = self.extract_features(obs)
+
+        # flatten the action
+        actions = actions.view(actions.shape[0], self.action_dim)
+
+        qvalue_input = th.cat([features, actions], dim=1)
+        return tuple(q_net(qvalue_input) for q_net in self.q_networks)
 
 
 class SACPolicy(BasePolicy):
@@ -329,9 +382,9 @@ class SACPolicy(BasePolicy):
         actor_kwargs = self._update_features_extractor(self.actor_kwargs, features_extractor)
         return Actor(**actor_kwargs).to(self.device)
 
-    def make_critic(self, features_extractor: Optional[BaseFeaturesExtractor] = None) -> ContinuousCritic:
+    def make_critic(self, features_extractor: Optional[BaseFeaturesExtractor] = None) -> DSACCritic:
         critic_kwargs = self._update_features_extractor(self.critic_kwargs, features_extractor)
-        return ContinuousCritic(**critic_kwargs).to(self.device)
+        return DSACCritic(**critic_kwargs).to(self.device)
 
     def forward(self, obs: th.Tensor, deterministic: bool = False) -> th.Tensor:
         return self._predict(obs, deterministic=deterministic)
