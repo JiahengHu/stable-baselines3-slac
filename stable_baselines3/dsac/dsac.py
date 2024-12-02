@@ -215,9 +215,17 @@ class DSAC(OffPolicyAlgorithm):
             if self.use_sde:
                 self.actor.reset_noise()
 
-            # Action by the current actor for the sampled state, using gumbel-softmax to make it differentiable
-            actions_pi, log_prob = self.actor.action_differentiable_log_prob(replay_data.observations)
-            # actions_pi, log_prob = self.actor.action_log_prob(replay_data.observations)
+            GUMBEL = True
+            state_samples = replay_data.observations
+            # Seems to not help at all...
+            # n_samples = 3
+            # state_samples = state_samples.repeat(n_samples, 1)
+            if GUMBEL:
+                # Action by the current actor for the sampled state, using gumbel-softmax to make it differentiable
+                actions_pi, log_prob = self.actor.action_differentiable_log_prob(state_samples)
+            else:
+                actions_pi, log_prob = self.actor.action_log_prob(state_samples)
+                actions_pi = th.nn.functional.one_hot(actions_pi, self.actor.action_dim)
             log_prob = log_prob.reshape(-1, 1)
 
             ent_coef_loss = None
@@ -268,9 +276,15 @@ class DSAC(OffPolicyAlgorithm):
             # Compute actor loss
             # Alternative: actor_loss = th.mean(log_prob - qf1_pi)
             # Min over all critic networks
-            q_values_pi = th.cat(self.critic(replay_data.observations, actions_pi), dim=1)
+            q_values_pi = th.cat(self.critic(state_samples, actions_pi), dim=1)
             min_qf_pi, _ = th.min(q_values_pi, dim=1, keepdim=True)
-            actor_loss = (ent_coef * log_prob - min_qf_pi).mean()
+
+            if GUMBEL:
+                actor_loss = (ent_coef * log_prob - min_qf_pi).mean()
+            else:
+                # The policy gradient loss
+                actor_loss = ((ent_coef - min_qf_pi) * log_prob).mean()
+
             actor_losses.append(actor_loss.item())
 
             # Optimize the actor
