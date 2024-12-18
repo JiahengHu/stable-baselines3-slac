@@ -4,6 +4,7 @@ from typing import Dict, List, Tuple, Type, Union
 import gym
 import torch as th
 from torch import nn
+from torch.nn import LayerNorm
 
 from stable_baselines3.common.preprocessing import get_flattened_obs_dim, is_image_space
 from stable_baselines3.common.type_aliases import TensorDict
@@ -99,6 +100,7 @@ def create_mlp(
     net_arch: List[int],
     activation_fn: Type[nn.Module] = nn.ReLU,
     squash_output: bool = False,
+    use_layer_norm: bool = False,
 ) -> List[nn.Module]:
     """
     Create a multi layer perceptron (MLP), which is
@@ -117,12 +119,17 @@ def create_mlp(
     """
 
     if len(net_arch) > 0:
-        modules = [nn.Linear(input_dim, net_arch[0]), activation_fn()]
+        if use_layer_norm:
+            modules = [nn.Linear(input_dim, net_arch[0]), LayerNorm(net_arch[0]), activation_fn()]
+        else:
+            modules = [nn.Linear(input_dim, net_arch[0]), activation_fn()]
     else:
         modules = []
 
     for idx in range(len(net_arch) - 1):
         modules.append(nn.Linear(net_arch[idx], net_arch[idx + 1]))
+        if use_layer_norm:
+            modules.append(LayerNorm(net_arch[idx + 1]))
         modules.append(activation_fn())
 
     if output_dim > 0:

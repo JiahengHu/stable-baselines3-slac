@@ -222,7 +222,7 @@ class DSAC(OffPolicyAlgorithm):
             # state_samples = state_samples.repeat(n_samples, 1)
             if GUMBEL:
                 # Action by the current actor for the sampled state, using gumbel-softmax to make it differentiable
-                actions_pi, log_prob = self.actor.action_differentiable_log_prob(state_samples)
+                actions_pi, log_prob = self.actor.action_differentiable_log_prob(state_samples, hard=False)
             else:
                 actions_pi, log_prob = self.actor.action_log_prob(state_samples)
                 actions_pi = th.nn.functional.one_hot(actions_pi, self.actor.action_dim)

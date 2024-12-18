@@ -62,6 +62,7 @@ class Actor(BasePolicy):
         use_expln: bool = False,
         clip_mean: float = 2.0,
         normalize_images: bool = True,
+        use_layer_norm: bool = True,
     ):
         super().__init__(
             observation_space,
@@ -81,8 +82,9 @@ class Actor(BasePolicy):
         self.use_expln = use_expln
         self.full_std = full_std
         self.clip_mean = clip_mean
+        self.use_layer_norm = use_layer_norm
 
-        latent_pi_net = create_mlp(features_dim, -1, net_arch, activation_fn)
+        latent_pi_net = create_mlp(features_dim, -1, net_arch, activation_fn, use_layer_norm=use_layer_norm)
         self.latent_pi = nn.Sequential(*latent_pi_net)
         last_layer_dim = net_arch[-1] if len(net_arch) > 0 else features_dim
 
@@ -143,10 +145,10 @@ class Actor(BasePolicy):
         return self.action_dist.log_prob_from_params(mean_actions, **kwargs)
 
     # Get differentiable samples using gumbel softmax
-    def action_differentiable_log_prob(self, obs: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
+    def action_differentiable_log_prob(self, obs: th.Tensor, hard=True, tau=1) -> Tuple[th.Tensor, th.Tensor]:
         logits, kwargs = self.get_action_dist_params(obs)
         gb_logits = logits.reshape(logits.shape[0], self.action_channel, self.action_dim)
-        actions = gumbel_softmax(gb_logits, tau=1, hard=True) #TODO: try hard=False later, hyperparam tune tau
+        actions = gumbel_softmax(gb_logits, tau=tau, hard=hard)
 
         # calculate the log prob
         self.action_dist.proba_distribution(logits)
@@ -197,6 +199,7 @@ class DSACCritic(BaseModel):
         normalize_images: bool = True,
         n_critics: int = 2,
         share_features_extractor: bool = True,
+        use_layer_norm: bool = True,
     ):
         super().__init__(
             observation_space,
@@ -211,7 +214,8 @@ class DSACCritic(BaseModel):
         self.n_critics = n_critics
         self.q_networks = []
         for idx in range(n_critics):
-            q_net = create_mlp(features_dim + action_dim, 1, net_arch, activation_fn)
+            q_net = create_mlp(features_dim + action_dim, 1, net_arch, activation_fn,
+                               use_layer_norm=use_layer_norm)
             q_net = nn.Sequential(*q_net)
             self.add_module(f"qf{idx}", q_net)
             self.q_networks.append(q_net)
@@ -276,6 +280,7 @@ class SACPolicy(BasePolicy):
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
         n_critics: int = 2,
         share_features_extractor: bool = False,
+        use_layer_norm: bool = True,
     ):
         super().__init__(
             observation_space,
@@ -292,6 +297,9 @@ class SACPolicy(BasePolicy):
 
         actor_arch, critic_arch = get_actor_critic_arch(net_arch)
 
+        if use_layer_norm:
+            assert not share_features_extractor, "Layer norm is not compatible with shared features extractor"
+
         self.net_arch = net_arch
         self.activation_fn = activation_fn
         self.net_args = {
@@ -300,6 +308,7 @@ class SACPolicy(BasePolicy):
             "net_arch": actor_arch,
             "activation_fn": self.activation_fn,
             "normalize_images": normalize_images,
+            "use_layer_norm": use_layer_norm,
         }
         self.actor_kwargs = self.net_args.copy()
 
