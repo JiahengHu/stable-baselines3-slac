@@ -107,6 +107,7 @@ class DSAC(OffPolicyAlgorithm):
         verbose: int = 0,
         seed: Optional[int] = None,
         device: Union[th.device, str] = "auto",
+        num_critic_samples: int = 2,
         _init_setup_model: bool = True,
     ):
 
@@ -144,6 +145,7 @@ class DSAC(OffPolicyAlgorithm):
         self.ent_coef = ent_coef
         self.target_update_interval = target_update_interval
         self.ent_coef_optimizer = None
+        self.num_critic_samples = num_critic_samples
 
         if _init_setup_model:
             self._setup_model()
@@ -254,6 +256,17 @@ class DSAC(OffPolicyAlgorithm):
                 onehot_next_actions = th.nn.functional.one_hot(next_actions, self.actor.action_dim)
                 # Compute the next Q values: min over all critics targets
                 next_q_values = th.cat(self.critic_target(replay_data.next_observations, onehot_next_actions), dim=1)
+
+                # subsample two critics and replace next q values
+                if self.num_critic_samples < self.critic.n_critics:
+                    # Means we need to subsample the critics
+                    subsample_idcs = np.random.randint(
+                        0,
+                        self.num_critic_samples,
+                        (self.num_critic_samples,),
+                    )
+                    next_q_values = next_q_values[:, subsample_idcs]
+
                 next_q_values, _ = th.min(next_q_values, dim=1, keepdim=True)
                 # add entropy term
                 next_q_values = next_q_values - ent_coef * next_log_prob.reshape(-1, 1)
