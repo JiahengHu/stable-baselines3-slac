@@ -11,7 +11,7 @@ from stable_baselines3.common.off_policy_algorithm import OffPolicyAlgorithm
 from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
 from stable_baselines3.common.utils import get_parameters_by_name, polyak_update
-from stable_baselines3.dsac.policies import CnnPolicy, MlpPolicy, MultiInputPolicy, SACPolicy
+from stable_baselines3.dsac.policies import CnnPolicy, MlpPolicy, MultiInputPolicy, DSACPolicy
 
 SelfDSAC = TypeVar("SelfDSAC", bound="DSAC")
 
@@ -82,7 +82,7 @@ class DSAC(OffPolicyAlgorithm):
 
     def __init__(
         self,
-        policy: Union[str, Type[SACPolicy]],
+        policy: Union[str, Type[DSACPolicy]],
         env: Union[GymEnv, str],
         learning_rate: Union[float, Schedule] = 3e-4,
         buffer_size: int = 1_000_000,  # 1e6
