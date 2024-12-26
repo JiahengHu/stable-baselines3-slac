@@ -62,7 +62,7 @@ class Actor(BasePolicy):
         use_expln: bool = False,
         clip_mean: float = 2.0,
         normalize_images: bool = True,
-        use_layer_norm: bool = True,
+        use_layer_norm: bool = False,
     ):
         super().__init__(
             observation_space,
@@ -199,7 +199,7 @@ class DSACCritic(BaseModel):
         normalize_images: bool = True,
         n_critics: int = 2,
         share_features_extractor: bool = True,
-        use_layer_norm: bool = True,
+        use_layer_norm: bool = False,
     ):
         super().__init__(
             observation_space,
@@ -233,7 +233,7 @@ class DSACCritic(BaseModel):
         return tuple(q_net(qvalue_input) for q_net in self.q_networks)
 
 
-class SACPolicy(BasePolicy):
+class DSACPolicy(BasePolicy):
     """
     Policy class (with both actor and critic) for SAC.
 
@@ -280,7 +280,7 @@ class SACPolicy(BasePolicy):
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
         n_critics: int = 2,
         share_features_extractor: bool = False,
-        use_layer_norm: bool = True,
+        use_layer_norm: bool = False,
     ):
         super().__init__(
             observation_space,
@@ -414,10 +414,10 @@ class SACPolicy(BasePolicy):
         self.training = mode
 
 
-MlpPolicy = SACPolicy
+MlpPolicy = DSACPolicy
 
 
-class CnnPolicy(SACPolicy):
+class CnnPolicy(DSACPolicy):
     """
     Policy class (with both actor and critic) for SAC.
 
@@ -462,6 +462,7 @@ class CnnPolicy(SACPolicy):
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
         n_critics: int = 2,
         share_features_extractor: bool = False,
+        use_layer_norm: bool = False,
     ):
         super().__init__(
             observation_space,
@@ -480,10 +481,11 @@ class CnnPolicy(SACPolicy):
             optimizer_kwargs,
             n_critics,
             share_features_extractor,
+            use_layer_norm
         )
 
 
-class MultiInputPolicy(SACPolicy):
+class MultiInputPolicy(DSACPolicy):
     """
     Policy class (with both actor and critic) for SAC.
 
@@ -528,6 +530,7 @@ class MultiInputPolicy(SACPolicy):
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
         n_critics: int = 2,
         share_features_extractor: bool = False,
+        use_layer_norm: bool = False,
     ):
         super().__init__(
             observation_space,
@@ -546,4 +549,5 @@ class MultiInputPolicy(SACPolicy):
             optimizer_kwargs,
             n_critics,
             share_features_extractor,
+            use_layer_norm,
         )
