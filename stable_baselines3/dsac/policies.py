@@ -4,6 +4,8 @@ import gym
 import torch as th
 from torch import nn
 from torch.nn.functional import gumbel_softmax
+from functorch import combine_state_for_ensemble
+from functorch import vmap
 
 from stable_baselines3.common.distributions import (
     MultiOneHotCategoricalDistribution, MultiCategoricalDistribution)
@@ -24,6 +26,51 @@ from stable_baselines3.common.policies import BaseModel
 LOG_STD_MAX = 2
 LOG_STD_MIN = -20
 
+class FactoredValueHead(nn.Module):
+    def __init__(self, input_size, output_size, num_Qs, use_layer_norm, hidden_size=1024, num_layers=2):
+        super().__init__()
+
+        self.output_size = output_size
+        self.num_Qs = num_Qs
+
+        Q_list = [] # [num_Qs * output_size (reward terms)]
+        sizes = [hidden_size] * (num_layers + 1) + [1]
+        for _ in range(self.num_Qs):
+            for _ in range(self.output_size):
+                Q1_layers = []
+                # Add a trunk to the Q network
+                Q1_layers += [nn.Linear(input_size, hidden_size), nn.LayerNorm(hidden_size), nn.Tanh()]
+                for i in range(num_layers):
+                    if use_layer_norm:
+                        Q1_layers += [nn.Linear(sizes[i], sizes[i + 1]), nn.LayerNorm(sizes[i + 1]), nn.ReLU()]
+                    else:
+                        Q1_layers += [nn.Linear(sizes[i], sizes[i + 1]), nn.ReLU()]
+                Q1_layers += [nn.Linear(sizes[-2], sizes[-1])]
+                Q_list.append(nn.Sequential(*Q1_layers))
+
+        # Parameter Stacking for speedup
+        fmodel_Q1, params_Q1, buffers_Q1 = combine_state_for_ensemble(Q_list)
+        self.Q1_params = [nn.Parameter(p) for p in params_Q1]
+        self.Q1_buffers = [nn.Buffer(b) for b in buffers_Q1]
+
+        for i, param in enumerate(self.Q1_params):
+            self.register_parameter('Q1_param_' + str(i), param)
+
+        for i, buffer in enumerate(self.Q1_buffers):
+            self.register_buffer('Q1_buffer_' + str(i), buffer)
+
+        self.Q_model = vmap(fmodel_Q1)
+
+    def forward(self, x):
+        batch_size = x.shape[0]
+        # X_shape: (batch_size, output_size, embedding_size)
+        x = th.swapaxes(x, 0, 1)  # (output_size, batch_size, embedding_size)
+        Q = self.Q_model(self.Q1_params, self.Q1_buffers, x)  # (output_size, batch_size, 1)
+
+        Q_out = Q.view(self.num_Qs, self.output_size, batch_size)
+        Q_out = th.swapaxes(Q_out, 0, 2) # (batch_size, output_size, n_q)
+
+        return Q_out
 
 class Actor(BasePolicy):
     """
@@ -163,7 +210,7 @@ class Actor(BasePolicy):
 
 class DSACCritic(BaseModel):
     """
-    Critic network(s) for DDPG/SAC/TD3.
+    Critic network(s) for Factored SAC
     It represents the action-state value function (Q-value function).
     Compared to A2C/PPO critics, this one represents the Q-value
     and takes the continuous action as input. It is concatenated with the state
@@ -195,6 +242,7 @@ class DSACCritic(BaseModel):
         net_arch: List[int],
         features_extractor: nn.Module,
         features_dim: int,
+        reward_dim: int,
         activation_fn: Type[nn.Module] = nn.ReLU,
         normalize_images: bool = True,
         n_critics: int = 2,
@@ -210,15 +258,22 @@ class DSACCritic(BaseModel):
 
         self.action_dim = action_dim = int(len(self.action_space.nvec) * self.action_space.nvec[0])
 
+        self.output_dim = reward_dim + 1 # extra for SAC entropy
+
+        # TODO: we need to change this to inject dependencies
+        attn_logit = nn.Parameter(th.ones([self.output_dim, self.action_dim]), requires_grad=False)
+        # TODO: We still need this to extend the causal matrix to match the dimension of the action, but only need to do this once
+        # attn = attn.repeat_interleave(self.factor_list, dim=-1)  # (num_skills, obs_dim)
+        self.register_parameter("attn_logit", attn_logit)
+
         self.share_features_extractor = share_features_extractor
+
         self.n_critics = n_critics
-        self.q_networks = []
-        for idx in range(n_critics):
-            q_net = create_mlp(features_dim + action_dim, 1, net_arch, activation_fn,
-                               use_layer_norm=use_layer_norm)
-            q_net = nn.Sequential(*q_net)
-            self.add_module(f"qf{idx}", q_net)
-            self.q_networks.append(q_net)
+
+        self.q_nets = FactoredValueHead(features_dim + action_dim, self.output_dim, n_critics,
+                                        use_layer_norm=use_layer_norm,
+                                        hidden_size=net_arch[0], # we use the same hidden size for all layers
+                                        num_layers=len(net_arch)-1)
 
     def forward(self, obs: th.Tensor, actions: th.Tensor) -> Tuple[th.Tensor, ...]:
         # Learn the features extractor using the policy loss only
@@ -226,11 +281,23 @@ class DSACCritic(BaseModel):
         with th.set_grad_enabled(not self.share_features_extractor):
             features = self.extract_features(obs)
 
+        # extend features to self.n_critics * self.output_dim
+        features = features.unsqueeze(1).repeat(1, self.n_critics * self.output_dim, 1)
+
         # flatten the action
         actions = actions.view(actions.shape[0], self.action_dim)
+        actions = self.attention_forward(actions, self.attn_logit)
+        actions = actions.repeat(1, self.n_critics, 1)
 
-        qvalue_input = th.cat([features, actions], dim=1)
-        return tuple(q_net(qvalue_input) for q_net in self.q_networks)
+        qvalue_input = th.cat([features, actions], dim=-1)
+
+        values = self.q_nets(qvalue_input) # shape: (batch_size, output_dim, n_critic)
+        return values
+
+    def attention_forward(self, x, attn_logits):
+        x = x.unsqueeze(1)
+        features = x * attn_logits  # (B, num_skills, obs_dim)
+        return features
 
 
 class DSACPolicy(BasePolicy):
@@ -260,6 +327,8 @@ class DSACPolicy(BasePolicy):
     :param n_critics: Number of critic networks to create.
     :param share_features_extractor: Whether to share or not the features extractor
         between the actor and the critic (this saves computation time)
+    :param use_layer_norm: Whether to use layer normalization or not
+    :param reward_dim: Number of reward dimensions
     """
 
     def __init__(
@@ -281,6 +350,7 @@ class DSACPolicy(BasePolicy):
         n_critics: int = 2,
         share_features_extractor: bool = False,
         use_layer_norm: bool = False,
+        reward_dim: int = 1,
     ):
         super().__init__(
             observation_space,
@@ -319,12 +389,14 @@ class DSACPolicy(BasePolicy):
             "clip_mean": clip_mean,
         }
         self.actor_kwargs.update(sde_kwargs)
+        self.reward_dim = reward_dim
         self.critic_kwargs = self.net_args.copy()
         self.critic_kwargs.update(
             {
                 "n_critics": n_critics,
                 "net_arch": critic_arch,
                 "share_features_extractor": share_features_extractor,
+                "reward_dim": reward_dim,
             }
         )
 
@@ -338,6 +410,7 @@ class DSACPolicy(BasePolicy):
         self.actor = self.make_actor()
         self.actor.optimizer = self.optimizer_class(self.actor.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)
 
+        assert not self.share_features_extractor
         if self.share_features_extractor:
             self.critic = self.make_critic(features_extractor=self.actor.features_extractor)
             # Do not optimize the shared features extractor with the critic loss

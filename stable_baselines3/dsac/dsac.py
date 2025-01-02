@@ -219,13 +219,12 @@ class DSAC(OffPolicyAlgorithm):
 
             GUMBEL = True
             state_samples = replay_data.observations
-            # Seems to not help at all...
-            # n_samples = 3
-            # state_samples = state_samples.repeat(n_samples, 1)
+
             if GUMBEL:
                 # Action by the current actor for the sampled state, using gumbel-softmax to make it differentiable
                 actions_pi, log_prob = self.actor.action_differentiable_log_prob(state_samples, hard=False)
             else:
+                # use policy gradient
                 actions_pi, log_prob = self.actor.action_log_prob(state_samples)
                 actions_pi = th.nn.functional.one_hot(actions_pi, self.actor.action_dim)
             log_prob = log_prob.reshape(-1, 1)
@@ -272,6 +271,8 @@ class DSAC(OffPolicyAlgorithm):
                 next_q_values = next_q_values - ent_coef * next_log_prob.reshape(-1, 1)
                 # td error + entropy term
                 target_q_values = replay_data.rewards + (1 - replay_data.dones) * self.gamma * next_q_values
+
+# TODO: check how critic (update and forward pass) is used in urlb, make update compatible with the factored critic
 
             # Get current Q-values estimates for each critic network
             onehot_actions = th.nn.functional.one_hot(replay_data.actions, self.actor.action_dim)
