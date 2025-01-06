@@ -1,3 +1,7 @@
+"""
+Currently, the DSAC algorithm will always have factored value output
+"""
+
 from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
 
 import gym
@@ -254,7 +258,7 @@ class DSAC(OffPolicyAlgorithm):
                 next_actions, next_log_prob = self.actor.action_log_prob(replay_data.next_observations)
                 onehot_next_actions = th.nn.functional.one_hot(next_actions, self.actor.action_dim)
                 # Compute the next Q values: min over all critics targets
-                next_q_values = th.cat(self.critic_target(replay_data.next_observations, onehot_next_actions), dim=1)
+                next_q_values = self.critic_target(replay_data.next_observations, onehot_next_actions)
 
                 # subsample two critics and replace next q values
                 if self.num_critic_samples < self.critic.n_critics:
@@ -264,22 +268,24 @@ class DSAC(OffPolicyAlgorithm):
                         self.num_critic_samples,
                         (self.num_critic_samples,),
                     )
-                    next_q_values = next_q_values[:, subsample_idcs]
+                    next_q_values = next_q_values[..., subsample_idcs]
 
-                next_q_values, _ = th.min(next_q_values, dim=1, keepdim=True)
-                # add entropy term
-                next_q_values = next_q_values - ent_coef * next_log_prob.reshape(-1, 1)
+                next_q_values, _ = th.min(next_q_values, dim=-1) # Batch_size * reward_dim
+
+                ent_r = - ent_coef * next_log_prob.reshape(-1, 1) * self.gamma
+                reward = th.concat([replay_data.rewards, ent_r], dim=-1)
+                assert reward.shape == next_q_values.shape
+
                 # td error + entropy term
-                target_q_values = replay_data.rewards + (1 - replay_data.dones) * self.gamma * next_q_values
-
-# TODO: check how critic (update and forward pass) is used in urlb, make update compatible with the factored critic
+                target_q_values = reward + (1 - replay_data.dones) * self.gamma * next_q_values
+                target_q_values = target_q_values.unsqueeze(-1)
 
             # Get current Q-values estimates for each critic network
             onehot_actions = th.nn.functional.one_hot(replay_data.actions, self.actor.action_dim)
             current_q_values = self.critic(replay_data.observations, onehot_actions)
 
             # Compute critic loss
-            critic_loss = 0.5 * sum(F.mse_loss(current_q, target_q_values) for current_q in current_q_values)
+            critic_loss = 0.5 * F.mse_loss(current_q_values, target_q_values) * self.critic.n_critics * self.critic.output_dim
             critic_losses.append(critic_loss.item())
 
             # Optimize the critic
@@ -290,8 +296,9 @@ class DSAC(OffPolicyAlgorithm):
             # Compute actor loss
             # Alternative: actor_loss = th.mean(log_prob - qf1_pi)
             # Min over all critic networks
-            q_values_pi = th.cat(self.critic(state_samples, actions_pi), dim=1)
-            min_qf_pi, _ = th.min(q_values_pi, dim=1, keepdim=True)
+            q_values_pi = self.critic(state_samples, actions_pi)
+            min_qf_pi, _ = th.min(q_values_pi, dim=-1)
+            min_qf_pi *= self.critic.output_dim
 
             if GUMBEL:
                 actor_loss = (ent_coef * log_prob - min_qf_pi).mean()
