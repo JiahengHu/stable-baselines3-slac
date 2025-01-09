@@ -103,6 +103,9 @@ class DSAC(OffPolicyAlgorithm):
         ent_coef: Union[str, float] = "auto",
         target_update_interval: int = 1,
         target_entropy: Union[str, float] = "auto",
+        target_entropy_default_coeff: float = 0.89,
+        use_gumbel: bool = True,
+        gumbel_temperature: float = 1.0,
         use_sde: bool = False,
         sde_sample_freq: int = -1,
         use_sde_at_warmup: bool = False,
@@ -151,6 +154,10 @@ class DSAC(OffPolicyAlgorithm):
         self.ent_coef_optimizer = None
         self.num_critic_samples = num_critic_samples
 
+        self.target_entropy_default_coeff = target_entropy_default_coeff
+        self.use_gumbel = use_gumbel
+        self.gumbel_temperature = gumbel_temperature
+
         if _init_setup_model:
             self._setup_model()
 
@@ -163,10 +170,8 @@ class DSAC(OffPolicyAlgorithm):
         # Target entropy is used when learning the entropy coefficient
         if self.target_entropy == "auto":
             # automatically set target entropy if needed
-            # TODO: consider changing the default target entropy
-            te_coeff = 0.5
             assert len(self.env.action_space.shape) == 1
-            self.target_entropy = te_coeff * np.log(
+            self.target_entropy = self.target_entropy_default_coeff * np.log(
                 1 / (self.env.action_space[0].n ** self.env.action_space.shape[0])
             ).astype(np.float32)
         else:
@@ -221,12 +226,12 @@ class DSAC(OffPolicyAlgorithm):
             if self.use_sde:
                 self.actor.reset_noise()
 
-            GUMBEL = True
             state_samples = replay_data.observations
 
-            if GUMBEL:
+            if self.use_gumbel:
                 # Action by the current actor for the sampled state, using gumbel-softmax to make it differentiable
-                actions_pi, log_prob = self.actor.action_differentiable_log_prob(state_samples, hard=False)
+                actions_pi, log_prob = self.actor.action_differentiable_log_prob(state_samples, hard=False,
+                                                                                 tau=self.gumbel_temperature)
             else:
                 # use policy gradient
                 actions_pi, log_prob = self.actor.action_log_prob(state_samples)
@@ -300,7 +305,7 @@ class DSAC(OffPolicyAlgorithm):
             min_qf_pi, _ = th.min(q_values_pi, dim=-1)
             min_qf_pi *= self.critic.output_dim
 
-            if GUMBEL:
+            if self.use_gumbel:
                 actor_loss = (ent_coef * log_prob - min_qf_pi).mean()
             else:
                 # The policy gradient loss
