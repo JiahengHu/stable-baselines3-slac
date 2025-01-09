@@ -248,6 +248,7 @@ class DSACCritic(BaseModel):
         n_critics: int = 2,
         share_features_extractor: bool = True,
         use_layer_norm: bool = False,
+        causal_matrix: Optional[th.Tensor] = None,
     ):
         super().__init__(
             observation_space,
@@ -260,10 +261,12 @@ class DSACCritic(BaseModel):
 
         self.output_dim = reward_dim + 1 # extra for SAC entropy
 
-        # TODO: we need to change this to inject dependencies
-        attn_logit = nn.Parameter(th.ones([self.output_dim, self.action_dim]), requires_grad=False)
-        # TODO: We still need this to extend the causal matrix to match the dimension of the action, but only need to do this once
-        # attn = attn.repeat_interleave(self.factor_list, dim=-1)  # (num_skills, obs_dim)
+        if causal_matrix is not None:
+            causal_matrix = causal_matrix.repeat_interleave(self.action_space.nvec[0], 1)
+            attn_logit = nn.Parameter(causal_matrix, requires_grad=False)
+        else:
+            attn_logit = nn.Parameter(th.ones([self.output_dim, self.action_dim]), requires_grad=False)
+
         self.register_parameter("attn_logit", attn_logit)
 
         self.share_features_extractor = share_features_extractor
@@ -351,6 +354,7 @@ class DSACPolicy(BasePolicy):
         share_features_extractor: bool = False,
         use_layer_norm: bool = False,
         reward_dim: int = 1,
+        causal_matrix: Optional[th.Tensor] = None,
     ):
         super().__init__(
             observation_space,
@@ -397,6 +401,7 @@ class DSACPolicy(BasePolicy):
                 "net_arch": critic_arch,
                 "share_features_extractor": share_features_extractor,
                 "reward_dim": reward_dim,
+                "causal_matrix": causal_matrix,
             }
         )
 
@@ -536,6 +541,8 @@ class CnnPolicy(DSACPolicy):
         n_critics: int = 2,
         share_features_extractor: bool = False,
         use_layer_norm: bool = False,
+        reward_dim: int = 1,
+        causal_matrix: Optional[th.Tensor] = None,
     ):
         super().__init__(
             observation_space,
@@ -554,7 +561,9 @@ class CnnPolicy(DSACPolicy):
             optimizer_kwargs,
             n_critics,
             share_features_extractor,
-            use_layer_norm
+            use_layer_norm,
+            reward_dim,
+            causal_matrix,
         )
 
 
@@ -604,6 +613,8 @@ class MultiInputPolicy(DSACPolicy):
         n_critics: int = 2,
         share_features_extractor: bool = False,
         use_layer_norm: bool = False,
+        reward_dim: int = 1,
+        causal_matrix: Optional[th.Tensor] = None,
     ):
         super().__init__(
             observation_space,
@@ -623,4 +634,6 @@ class MultiInputPolicy(DSACPolicy):
             n_critics,
             share_features_extractor,
             use_layer_norm,
+            reward_dim,
+            causal_matrix,
         )
