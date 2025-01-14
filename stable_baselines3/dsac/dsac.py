@@ -283,7 +283,7 @@ class DSAC(OffPolicyAlgorithm):
 
                 # td error + entropy term
                 target_q_values = reward + (1 - replay_data.dones) * self.gamma * next_q_values
-                target_q_values = target_q_values.unsqueeze(-1)
+                target_q_values = target_q_values.unsqueeze(-1).repeat(1, 1, self.critic.n_critics)
 
             # Get current Q-values estimates for each critic network
             onehot_actions = th.nn.functional.one_hot(replay_data.actions, self.actor.action_dim)
