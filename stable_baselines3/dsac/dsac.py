@@ -230,13 +230,14 @@ class DSAC(OffPolicyAlgorithm):
 
             if self.use_gumbel:
                 # Action by the current actor for the sampled state, using gumbel-softmax to make it differentiable
-                actions_pi, log_prob = self.actor.action_differentiable_log_prob(state_samples, hard=False,
+                actions_pi, _ = self.actor.action_differentiable_log_prob(state_samples, hard=False,
                                                                                  tau=self.gumbel_temperature)
+                actions_ent = self.actor.action_dist.entropy().mean()
             else:
                 # use policy gradient
                 actions_pi, log_prob = self.actor.action_log_prob(state_samples)
                 actions_pi = th.nn.functional.one_hot(actions_pi, self.actor.action_dim)
-            log_prob = log_prob.reshape(-1, 1)
+                log_prob = log_prob.reshape(-1, 1)
 
             ent_coef_loss = None
             if self.ent_coef_optimizer is not None:
@@ -306,7 +307,7 @@ class DSAC(OffPolicyAlgorithm):
             min_qf_pi *= self.critic.output_dim
 
             if self.use_gumbel:
-                actor_loss = (ent_coef * log_prob - min_qf_pi).mean()
+                actor_loss = (-ent_coef * actions_ent - min_qf_pi).mean()
             else:
                 # The policy gradient loss
                 actor_loss = ((ent_coef - min_qf_pi) * log_prob).mean()
@@ -330,7 +331,7 @@ class DSAC(OffPolicyAlgorithm):
         self.logger.record("train/ent_coef", np.mean(ent_coefs))
         self.logger.record("train/actor_loss", np.mean(actor_losses))
         self.logger.record("train/critic_loss", np.mean(critic_losses))
-        self.logger.record("train/actor_ent", -log_prob.mean().item())
+        self.logger.record("train/actor_ent", actions_ent.item())
         if len(ent_coef_losses) > 0:
             self.logger.record("train/ent_coef_loss", np.mean(ent_coef_losses))
 
