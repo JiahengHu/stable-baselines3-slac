@@ -9,7 +9,7 @@ import numpy as np
 import torch as th
 from torch.nn import functional as F
 
-from stable_baselines3.common.buffers import ReplayBuffer
+from stable_baselines3.common.buffers import ReplayBuffer, FactoredDictReplayBuffer
 from stable_baselines3.common.noise import ActionNoise
 from stable_baselines3.common.off_policy_algorithm import OffPolicyAlgorithm
 from stable_baselines3.common.policies import BasePolicy
@@ -97,8 +97,8 @@ class DSAC(OffPolicyAlgorithm):
         train_freq: Union[int, Tuple[int, str]] = 1,
         gradient_steps: int = 1,
         action_noise: Optional[ActionNoise] = None,
-        replay_buffer_class: Optional[Type[ReplayBuffer]] = None,
-        replay_buffer_kwargs: Optional[Dict[str, Any]] = None,
+        replay_buffer_class: Optional[Type[ReplayBuffer]] = FactoredDictReplayBuffer,
+        replay_buffer_kwargs: Optional[Dict[str, Any]] = {},
         optimize_memory_usage: bool = False,
         ent_coef: Union[str, float] = "auto",
         target_update_interval: int = 1,
@@ -117,7 +117,8 @@ class DSAC(OffPolicyAlgorithm):
         num_critic_samples: int = 2,
         _init_setup_model: bool = True,
     ):
-
+        assert replay_buffer_class == FactoredDictReplayBuffer, "Currently, the DSAC algorithm will always have factored value output"
+        replay_buffer_kwargs["reward_channels_dim"] = policy_kwargs["reward_dim"]
         super().__init__(
             policy,
             env,
@@ -332,6 +333,7 @@ class DSAC(OffPolicyAlgorithm):
         self.logger.record("train/actor_loss", np.mean(actor_losses))
         self.logger.record("train/critic_loss", np.mean(critic_losses))
         self.logger.record("train/actor_ent", actions_ent.item())
+
         if len(ent_coef_losses) > 0:
             self.logger.record("train/ent_coef_loss", np.mean(ent_coef_losses))
 

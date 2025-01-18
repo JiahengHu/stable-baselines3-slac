@@ -641,6 +641,59 @@ class DictReplayBuffer(ReplayBuffer):
         )
 
 
+class FactoredDictReplayBuffer(DictReplayBuffer):
+    def __init__(
+            self,
+            buffer_size: int,
+            observation_space: spaces.Space,
+            action_space: spaces.Space,
+            reward_channels_dim: int,
+            device: Union[th.device, str] = "auto",
+            n_envs: int = 1,
+            optimize_memory_usage: bool = False,
+            handle_timeout_termination: bool = True,
+    ):
+        self.reward_channels_dim = reward_channels_dim
+        super().__init__(buffer_size, observation_space, action_space, device,
+                         n_envs=n_envs,
+                         optimize_memory_usage=optimize_memory_usage,
+                         handle_timeout_termination=handle_timeout_termination)
+
+        self.rewards = np.zeros((self.buffer_size, self.n_envs, reward_channels_dim), dtype=np.float32)
+
+    def _get_samples(self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None) -> DictReplayBufferSamples:
+        # Sample randomly the env idx
+        env_indices = np.random.randint(0, high=self.n_envs, size=(len(batch_inds),))
+
+        # Normalize if needed and remove extra dimension (we are using only one env for now)
+        obs_ = self._normalize_obs({key: obs[batch_inds, env_indices, :] for key, obs in self.observations.items()},
+                                   env)
+        next_obs_ = self._normalize_obs(
+            {key: obs[batch_inds, env_indices, :] for key, obs in self.next_observations.items()}, env
+        )
+
+        # Convert to torch tensor
+        observations = {key: self.to_torch(obs) for key, obs in obs_.items()}
+        next_observations = {key: self.to_torch(obs) for key, obs in next_obs_.items()}
+
+        return DictReplayBufferSamples(
+            observations=observations,
+            actions=self.to_torch(self.actions[batch_inds, env_indices]),
+            next_observations=next_observations,
+            # Only use dones that are not due to timeouts
+            # deactivated by default (timeouts is initialized as an array of False)
+            dones=self.to_torch(
+                self.dones[batch_inds, env_indices] * (1 - self.timeouts[batch_inds, env_indices])).reshape(
+                -1, 1
+            ),
+            rewards=self.to_torch(
+                self._normalize_reward(
+                    self.rewards[batch_inds, env_indices].reshape(-1, self.reward_channels_dim), env
+                )
+            ),
+        )
+
+
 class DictRolloutBuffer(RolloutBuffer):
     """
     Dict Rollout buffer used in on-policy algorithms like A2C/PPO.
