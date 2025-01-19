@@ -661,6 +661,19 @@ class FactoredDictReplayBuffer(DictReplayBuffer):
 
         self.rewards = np.zeros((self.buffer_size, self.n_envs, reward_channels_dim), dtype=np.float32)
 
+    def add(
+        self,
+        obs: Dict[str, np.ndarray],
+        next_obs: Dict[str, np.ndarray],
+        action: np.ndarray,
+        reward: np.ndarray,
+        done: np.ndarray,
+        infos: List[Dict[str, Any]],
+    ) -> None:
+        if len(reward.shape) == 1:
+            reward = np.expand_dims(reward, -1) # add the reward channel dim
+        super().add(obs, next_obs, action, reward, done, infos)
+
     def _get_samples(self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None) -> DictReplayBufferSamples:
         # Sample randomly the env idx
         env_indices = np.random.randint(0, high=self.n_envs, size=(len(batch_inds),))
