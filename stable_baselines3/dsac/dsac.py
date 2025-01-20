@@ -117,8 +117,12 @@ class DSAC(OffPolicyAlgorithm):
         num_critic_samples: int = 2,
         _init_setup_model: bool = True,
     ):
-        assert replay_buffer_class == FactoredDictReplayBuffer, "Currently, the DSAC algorithm will always have factored value output"
-        replay_buffer_kwargs["reward_channels_dim"] = policy_kwargs["reward_dim"]
+        if env.observation_space.__class__.__name__ == "Dict":
+            assert replay_buffer_class == FactoredDictReplayBuffer, "Currently, the DSAC algorithm will always have factored value output"
+            replay_buffer_kwargs["reward_channels_dim"] = policy_kwargs["reward_dim"]
+        else:
+            assert env.observation_space.__class__.__name__ == "Box"
+            replay_buffer_class = None
         super().__init__(
             policy,
             env,
