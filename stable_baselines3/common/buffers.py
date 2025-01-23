@@ -641,6 +641,73 @@ class DictReplayBuffer(ReplayBuffer):
         )
 
 
+class FactoredReplayBuffer(ReplayBuffer):
+    """
+    Factored Replay buffer used in off-policy algorithms like SAC/TD3.
+    Extends the ReplayBuffer to use dictionary observations
+
+    :param buffer_size: Max number of element in the buffer
+    :param observation_space: Observation space
+    :param action_space: Action space
+    :param reward_channels_dim: Number of reward channels
+    :param device: PyTorch device
+    :param n_envs: Number of parallel environments
+    :param optimize_memory_usage: Enable a memory efficient variant
+        Disabled for now (see
+    """
+
+    def __init__(
+        self,
+        buffer_size: int,
+        observation_space: spaces.Space,
+        action_space: spaces.Space,
+        reward_channels_dim: int,
+        device: Union[th.device, str] = "auto",
+        n_envs: int = 1,
+        optimize_memory_usage: bool = False,
+        handle_timeout_termination: bool = True,
+    ):
+        self.reward_channels_dim = reward_channels_dim
+        super().__init__(buffer_size, observation_space, action_space, device,
+                         n_envs=n_envs,
+                         optimize_memory_usage=optimize_memory_usage,
+                         handle_timeout_termination=handle_timeout_termination)
+
+        self.rewards = np.zeros((self.buffer_size, self.n_envs, reward_channels_dim), dtype=np.float32)
+
+    def add(
+        self,
+        obs: np.ndarray,
+        next_obs: np.ndarray,
+        action: np.ndarray,
+        reward: np.ndarray,
+        done: np.ndarray,
+        infos: List[Dict[str, Any]],
+    ) -> None:
+        if len(reward.shape) == 1:
+            reward = np.expand_dims(reward, -1)
+        super().add(obs, next_obs, action, reward, done, infos)
+
+    def _get_samples(self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None) -> ReplayBufferSamples:
+        # Sample randomly the env idx
+        env_indices = np.random.randint(0, high=self.n_envs, size=(len(batch_inds),))
+
+        if self.optimize_memory_usage:
+            next_obs = self._normalize_obs(self.observations[(batch_inds + 1) % self.buffer_size, env_indices, :], env)
+        else:
+            next_obs = self._normalize_obs(self.next_observations[batch_inds, env_indices, :], env)
+
+        data = (
+            self._normalize_obs(self.observations[batch_inds, env_indices, :], env),
+            self.actions[batch_inds, env_indices, :],
+            next_obs,
+            # Only use dones that are not due to timeouts
+            # deactivated by default (timeouts is initialized as an array of False)
+            (self.dones[batch_inds, env_indices] * (1 - self.timeouts[batch_inds, env_indices])).reshape(-1, 1),
+            self._normalize_reward(self.rewards[batch_inds, env_indices].reshape(-1, self.reward_channels_dim), env),
+        )
+        return ReplayBufferSamples(*tuple(map(self.to_torch, data)))
+
 class FactoredDictReplayBuffer(DictReplayBuffer):
     def __init__(
             self,

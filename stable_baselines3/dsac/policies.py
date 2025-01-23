@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
 import gym
+import torch
 import torch as th
 from torch import nn
 from torch.nn.functional import gumbel_softmax
@@ -262,7 +263,10 @@ class DSACCritic(BaseModel):
         self.output_dim = reward_dim + 1 # extra for SAC entropy
 
         if causal_matrix is not None:
+            # add a row to the matrix
+            ent_row = torch.ones(1, self.action_dim)
             causal_matrix = causal_matrix.repeat_interleave(self.action_space.nvec[0], 1)
+            causal_matrix = torch.cat([causal_matrix, ent_row], dim=0)
             attn_logit = nn.Parameter(causal_matrix, requires_grad=False)
         else:
             attn_logit = nn.Parameter(th.ones([self.output_dim, self.action_dim]), requires_grad=False)

@@ -9,7 +9,7 @@ import numpy as np
 import torch as th
 from torch.nn import functional as F
 
-from stable_baselines3.common.buffers import ReplayBuffer, FactoredDictReplayBuffer
+from stable_baselines3.common.buffers import ReplayBuffer, FactoredDictReplayBuffer, FactoredReplayBuffer
 from stable_baselines3.common.noise import ActionNoise
 from stable_baselines3.common.off_policy_algorithm import OffPolicyAlgorithm
 from stable_baselines3.common.policies import BasePolicy
@@ -122,7 +122,8 @@ class DSAC(OffPolicyAlgorithm):
             replay_buffer_kwargs["reward_channels_dim"] = policy_kwargs["reward_dim"]
         else:
             assert env.observation_space.__class__.__name__ == "Box"
-            replay_buffer_class = None
+            replay_buffer_class = FactoredReplayBuffer # Use the factored replay buffer
+            replay_buffer_kwargs["reward_channels_dim"] = policy_kwargs["reward_dim"]
         super().__init__(
             policy,
             env,
