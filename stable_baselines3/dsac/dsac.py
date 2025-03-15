@@ -13,7 +13,7 @@ from stable_baselines3.common.buffers import ReplayBuffer, FactoredDictReplayBuf
 from stable_baselines3.common.noise import ActionNoise
 from stable_baselines3.common.off_policy_algorithm import OffPolicyAlgorithm
 from stable_baselines3.common.policies import BasePolicy
-from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
+from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule, DictReplayBufferSamples
 from stable_baselines3.common.utils import get_parameters_by_name, polyak_update
 from stable_baselines3.dsac.policies import CnnPolicy, MlpPolicy, MultiInputPolicy, DSACPolicy
 
@@ -164,6 +164,8 @@ class DSAC(OffPolicyAlgorithm):
         self.use_gumbel = use_gumbel
         self.gumbel_temperature = gumbel_temperature
 
+        self.old_replay_buffer = None
+
         if _init_setup_model:
             self._setup_model()
 
@@ -226,7 +228,30 @@ class DSAC(OffPolicyAlgorithm):
 
         for gradient_step in range(gradient_steps):
             # Sample replay buffer
-            replay_data = self.replay_buffer.sample(batch_size, env=self._vec_normalize_env)
+            if self.old_replay_buffer is None:
+                replay_data = self.replay_buffer.sample(batch_size, env=self._vec_normalize_env)
+            else:
+                # sample 50 50 from old and new replay buffer
+                replay_data_new = self.replay_buffer.sample(batch_size // 2, env=self._vec_normalize_env)
+                replay_data_old = self.old_replay_buffer.sample(batch_size // 2, env=self._vec_normalize_env)
+
+                obs = {}
+                for key in replay_data_new.observations.keys():
+                    obs[key] = th.cat([replay_data_new.observations[key], replay_data_old.observations[key]], dim=0)
+                nxt_obs = {}
+                for key in replay_data_new.next_observations.keys():
+                    nxt_obs[key] = th.cat([replay_data_new.next_observations[key], replay_data_old.next_observations[key]], dim=0)
+                actions = th.cat([replay_data_new.actions, replay_data_old.actions], dim=0)
+                dones = th.cat([replay_data_new.dones, replay_data_old.dones], dim=0)
+                rewards = th.cat([replay_data_new.rewards, replay_data_old.rewards], dim=0)
+
+                replay_data = DictReplayBufferSamples(
+                    observations=obs,
+                    actions=actions,
+                    next_observations=nxt_obs,
+                    dones=dones,
+                    rewards=rewards,
+                )
 
             # We need to sample because `log_std` may have changed between two gradient steps
             if self.use_sde:
