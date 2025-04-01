@@ -64,6 +64,7 @@ class DummyVecEnv(VecEnv):
                 if self.factored_reward:
                     self.buf_rews[env_idx] = rews_ph
                 else:
+                    print("WARNING: dummyVecEnv shouldn't be in charge of summing the rewards")
                     self.buf_rews[env_idx] = rews_ph.sum(axis=-1)
             else:
                 self.buf_rews[env_idx] = rews_ph

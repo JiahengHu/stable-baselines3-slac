@@ -686,6 +686,7 @@ class FactoredReplayBuffer(ReplayBuffer):
     ) -> None:
         if len(reward.shape) == 1:
             reward = np.expand_dims(reward, -1)
+        assert reward.shape[-1] == self.reward_channels_dim, f"Reward shape {reward.shape} does not match reward_channels_dim {self.reward_channels_dim}"
         super().add(obs, next_obs, action, reward, done, infos)
 
     def _get_samples(self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None) -> ReplayBufferSamples:
