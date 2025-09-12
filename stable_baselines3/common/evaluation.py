@@ -94,14 +94,6 @@ def evaluate_policy(
         observations, rewards, dones, infos = env.step(actions)
         current_rewards += rewards
 
-        # # TODO: We can predict value here
-        # if current_lengths > 490:
-        #     obs_tensor, _ = model.policy.obs_to_tensor(observations)
-        #     values = model.policy.predict_values(obs_tensor)
-        #     print(values)
-        #     import ipdb
-        #     ipdb.set_trace()
-
         current_lengths += 1
         for i in range(n_envs):
             if episode_counts[i] < episode_count_targets[i]:

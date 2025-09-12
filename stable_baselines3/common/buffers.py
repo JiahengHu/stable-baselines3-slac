@@ -1036,21 +1036,6 @@ class FacDictRolloutBuffer(DictRolloutBuffer):
         # in David Silver Lecture 4: https://www.youtube.com/watch?v=PnHCvfgC_ZA
         self.returns = self.advantages + self.values
 
-        # TODO: not needed
-        if False:
-            # Calculate variance of reward
-            # First, convert data type to 64, for precision purpose
-            new_rewards = self.rewards.copy().astype(np.float64).reshape(-1, self.reward_channels_dim)
-            self.count, self.r_means, self.r_M2 = update(self.count, self.r_means, self.r_M2, new_rewards)
-            self.r_var = finalize(self.count, self.r_means, self.r_M2)
-            self.r_var_batch = np.var(new_rewards, axis=0)
-
-            # Calculate mean of return^2
-            new_returns = self.returns.copy().astype(np.float64).reshape(-1, self.reward_channels_dim)
-            nr2 = new_returns * new_returns
-            delta = np.subtract(nr2, self.G2_means)
-            self.G2_means += np.sum(delta / self.count, axis=0)
-            self.G2_means_batch = np.mean(nr2, axis=0)
 
     # # Might or might not need to be changed
     def add(

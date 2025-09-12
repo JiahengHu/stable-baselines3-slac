@@ -136,12 +136,6 @@ class Actor(BasePolicy):
         self.latent_pi = nn.Sequential(*latent_pi_net)
         last_layer_dim = net_arch[-1] if len(net_arch) > 0 else features_dim
 
-        # TODO: add these back for continous action
-        # action_dim = get_action_dim(self.action_space)
-        # self.action_dist = SquashedDiagGaussianDistribution(action_dim)
-        # self.mu = nn.Linear(last_layer_dim, action_dim)
-        # self.log_std = nn.Linear(last_layer_dim, action_dim)
-
         # We stick with the integer version for now - will manually convert to one-hot
         self.action_dist = MultiCategoricalDistribution(self.action_space.nvec)
 
